@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Crossbearing read-only audit role. Grants only the read-only actions the
+  `crossbearing report` binary invokes; nothing can mutate infrastructure and
+  no data leaves the account. Crossbearing assumes the role cross-account,
+  gated by an external id you choose.
+
+Parameters:
+  CrossbearingPrincipalArn:
+    Type: String
+    Description: The crossbearing IAM principal permitted to assume this role (crossbearing provides this).
+  ExternalId:
+    Type: String
+    MinLength: 16
+    NoEcho: true
+    Description: A shared secret presented on every AssumeRole (you choose it; share it with crossbearing out of band).
+  KmsSigningKeyArn:
+    Type: String
+    Default: ""
+    Description: Optional KMS key crossbearing signs the evidence package with (engagement only). Leave blank for the free audit, which never signs.
+  RoleName:
+    Type: String
+    Default: crossbearing-readonly
+
+Conditions:
+  Sign: !Not [!Equals [!Ref KmsSigningKeyArn, ""]]
+
+Resources:
+  CrossbearingReadonlyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Description: Read-only audit access for crossbearing (agent attribution). No mutation; no data leaves the account.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AssumeWithExternalId
+            Effect: Allow
+            Principal:
+              AWS: !Ref CrossbearingPrincipalArn
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref ExternalId
+      Policies:
+        - PolicyName: !Sub "${RoleName}-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # cloudtrail:LookupEvents does not support resource scoping; AWS requires "*".
+              - Sid: CrossbearingReadAccountWide
+                Effect: Allow
+                Action: cloudtrail:LookupEvents
+                Resource: "*"
+              # iam:GetRole reads role metadata + trust policy only; scoped to this account.
+              - Sid: CrossbearingReadRoleTrustPolicies
+                Effect: Allow
+                Action: iam:GetRole
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/*"
+              # Engagement only: sign the evidence package with the one named key.
+              - !If
+                - Sign
+                - Sid: CrossbearingSignEvidence
+                  Effect: Allow
+                  Action: kms:Sign
+                  Resource: !Ref KmsSigningKeyArn
+                - !Ref AWS::NoValue
+      Tags:
+        - { Key: Vendor, Value: crossbearing }
+        - { Key: Purpose, Value: agent-attribution-audit }
+        - { Key: Access, Value: read-only }
+
+Outputs:
+  RoleArn:
+    Description: Hand this ARN (and your external id) to crossbearing.
+    Value: !GetAtt CrossbearingReadonlyRole.Arn

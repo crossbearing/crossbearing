@@ -1,0 +1,46 @@
+# The merge bar, mechanized: the same four commands CLAUDE.md requires
+# before any commit, plus the vulnerability scan the lean-go.sum product
+# property exists to keep trivial. Every step fails the build — no
+# warn-only gates.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (race)
+        run: go test ./... -count=1 -race
+
+      - name: fuzz smoke (untrusted-input parsers)
+        run: |
+          go test ./internal/corroborate -run '^$' -fuzz FuzzCLIRecordOps -fuzztime 15s
+          go test ./internal/aws -run '^$' -fuzz FuzzParseARN -fuzztime 15s
+          go test ./internal/ingest -run '^$' -fuzz FuzzSplitJSONArrayOrLines -fuzztime 10s
+          go test ./internal/ingest/k8s -run '^$' -fuzz FuzzIngest -fuzztime 10s
+          go test ./internal/ingest/gcp -run '^$' -fuzz FuzzIngest -fuzztime 10s
+          go test ./internal/ingest/azure -run '^$' -fuzz FuzzIngest -fuzztime 10s
+          go test ./internal/ingest/github -run '^$' -fuzz FuzzIngest -fuzztime 10s
+          go test ./internal/ingest/claudecode -run '^$' -fuzz FuzzIngest -fuzztime 10s
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
