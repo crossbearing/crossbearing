@@ -1,0 +1,4 @@
+[
+  {"eventVersion":"1.09","eventID":"ct-1","eventTime":"2026-06-16T14:00:07Z","eventSource":"sts.amazonaws.com","eventName":"GetCallerIdentity","awsRegion":"us-east-1","readOnly":true,"userIdentity":{"type":"AssumedRole","arn":"arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot","accountId":"111122223333","accessKeyId":"ASIADEPLOYBOT0001"},"resources":[]},
+  {"eventVersion":"1.09","eventID":"ct-2","eventTime":"2026-06-16T14:05:30Z","eventSource":"s3.amazonaws.com","eventName":"CreateBucket","awsRegion":"us-east-1","readOnly":false,"userIdentity":{"type":"AssumedRole","arn":"arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot","accountId":"111122223333","accessKeyId":"ASIADEPLOYBOT0001"},"resources":[{"ARN":"arn:aws:s3:::prod-customer-exports","type":"AWS::S3::Bucket"}]}
+]

@@ -1,0 +1,53 @@
+crossbearing divergence report
+  window   2026-06-23 13:30:05Z → 2026-06-23 15:00:02Z (offline (captured CloudTrail))
+  session  deploy-2026-06-23
+           agent=claude-code human=UNATTRIBUTED (unattributed) active 2026-06-23 14:00:05Z → 2026-06-23 14:30:02Z
+  claims   4 in transcript · 4 record-corroborable (aws CLI vocabulary)
+  records  5 in window · 5 joined (no principal filter)
+
+  unattributed 1 · mismatch 1 · unclaimed-record 1 · unrecorded-claim 1 · corroborated 2
+
+ATTRIBUTION
+  agent session deploy-2026-06-2… ⇄ credential session deploy-bot@2026-06-23T14:00:08Z key=ASIADEPLOYBOT0001
+    corroborated · human=UNATTRIBUTED (unattributed) · evidence: 2 item(s)
+
+UNATTRIBUTED (1)
+  record  s3:CreateBucket at 14:04:30Z by arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot
+          event ct-4
+  why     production-touching action with agent fingerprints and no named human binding
+
+
+MISMATCH (1)
+  claim   Bash(aws s3api get-bucket-policy --bucket prod-payments-exports) at 14:02:00Z
+  record  s3:PutBucketPolicy at 14:02:06Z by arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot
+          event ct-3
+  why     claimed Bash(aws s3api get-bucket-policy --bucket prod-payments-exports) but infrastructure recorded s3:PutBucketPolicy
+
+
+UNCLAIMED-RECORD (1)
+  record  iam:ListAccessKeys at 14:05:10Z by arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot
+          event ct-5
+  why     infrastructure recorded this action inside an agent session window; no claim accounts for it
+
+
+UNRECORDED-CLAIM (1)
+  claim   Bash(aws rds describe-db-instances --db-instance-identifier prod-orders) at 14:30:00Z
+  why     no infrastructure record corroborates this claim within the match window
+
+
+CORROBORATED (2)
+  claim   Bash(aws sts get-caller-identity --output json) at 14:00:05Z
+  record  sts:GetCallerIdentity at 14:00:08Z by arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot
+          event ct-1
+  why     claim corroborated by aws-cloudtrail record ct-1
+
+  claim   Bash(aws ec2 describe-instances --filters Name=tag:app,Values=payments) at 14:01:00Z
+  record  ec2:DescribeInstances at 14:01:04Z by arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot
+          event ct-2
+  why     claim corroborated by aws-cloudtrail record ct-2
+
+
+AGENT-SUSPECT (1 of 1 unattributed)
+  record       s3:CreateBucket by arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot (event ct-4)
+  fingerprint  credential session proven to be the agent's by corroborated record ct-1
+
