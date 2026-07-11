@@ -1,0 +1,338 @@
+<!doctype html>
+<!--
+  Crossbearing — Agent Attribution Audit
+  Emitted by `crossbearing report --format html`. The numbers, findings, and
+  provenance are the real join output; the chrome is the wedge deliverable.
+  Open in a browser → Print → "Save as PDF" (@page is set for Letter).
+  Brand: paper #f2efe9 · ink #182433 · sea-blue fix #0b96d6.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Attribution Audit — crossbearing</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --paper: #f2efe9;
+        --paper-200: #d8d2c4;
+        --ink: #182433;
+        --ink-700: #243446;
+        --ink-500: #3c5067;
+        --ink-400: #5a6f86;
+        --fix: #0b96d6;
+        --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+        --mono: "IBM Plex Mono", ui-monospace, monospace;
+        --display: "Fraunces", Georgia, serif;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body {
+        font-family: var(--sans);
+        color: var(--ink);
+        background: var(--paper);
+        font-size: 14px;
+        line-height: 1.55;
+        -webkit-font-smoothing: antialiased;
+      }
+      .page { max-width: 820px; margin: 0 auto; padding: 48px 40px 64px; }
+      .tick { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-400); }
+      .mono { font-family: var(--mono); }
+      .rule { border: 0; border-top: 1px solid var(--paper-200); margin: 18px 0; }
+      .sheet {
+        background: #fbfaf7;
+        border: 1px solid var(--paper-200);
+        border-radius: 2px;
+        box-shadow: 0 1px 1px rgba(24,36,51,0.04), 0 4px 10px rgba(24,36,51,0.05), 0 12px 24px rgba(24,36,51,0.04);
+        padding: 18px 20px;
+      }
+      .head { display: flex; align-items: center; justify-content: space-between; }
+      .brand { display: flex; align-items: center; gap: 9px; }
+      .brand .name { font-family: var(--mono); font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink); }
+      .tag {
+        font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fix);
+        border: 1px solid color-mix(in srgb, var(--fix) 30%, transparent); background: color-mix(in srgb, var(--fix) 9%, white); padding: 3px 7px;
+      }
+      .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--fix); margin-top: 28px; }
+      .meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 14px; }
+      .meta .k { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-400); }
+      .meta .v { font-size: 13px; color: var(--ink-700); margin-top: 2px; }
+      .headline {
+        font-family: var(--display); font-weight: 600; font-size: 27px; line-height: 1.18; letter-spacing: -0.01em;
+        margin: 26px 0 6px; max-width: 30ch;
+      }
+      .headline em { font-style: italic; color: var(--fix); font-weight: 600; }
+      .subhead { color: var(--ink-500); font-size: 14px; max-width: 62ch; }
+      .strip {
+        display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px; background: var(--paper-200);
+        border: 1px solid var(--paper-200); margin: 22px 0 6px;
+      }
+      .stat { background: #fbfaf7; padding: 14px 14px 12px; }
+      .stat .n { font-family: var(--display); font-weight: 600; font-size: 30px; line-height: 1; color: var(--ink); }
+      .stat.flag .n { color: var(--fix); }
+      .stat .l { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-400); margin-top: 8px; }
+      .section { margin-top: 34px; }
+      .section > h2 { font-family: var(--display); font-weight: 600; font-size: 18px; letter-spacing: -0.01em; display: flex; align-items: baseline; gap: 10px; }
+      .section > h2 .idx { font-family: var(--mono); font-size: 12px; color: var(--fix); font-weight: 500; }
+      .section > p.lede { color: var(--ink-500); margin-top: 6px; max-width: 70ch; }
+      .findings { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; }
+      .finding .op { font-family: var(--mono); font-size: 14px; font-weight: 500; color: var(--ink); }
+      .finding .op .badge {
+        font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: white;
+        background: var(--fix); padding: 2px 6px; margin-left: 8px; vertical-align: middle;
+      }
+      .kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 12px; margin-top: 10px; font-size: 13px; }
+      .kv .k { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-400); padding-top: 2px; }
+      .kv .v { color: var(--ink-700); }
+      .why { margin-top: 10px; padding-left: 12px; border-left: 2px solid var(--fix); color: var(--ink-700); font-size: 13px; }
+      .prov { margin-top: 10px; font-family: var(--mono); font-size: 11px; color: var(--ink-400); word-break: break-all; }
+      .prov .loc { color: var(--ink-500); }
+      .diverge { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin-top: 12px; border: 1px solid var(--paper-200); }
+      .diverge > div { padding: 12px 14px; }
+      .diverge .claim { border-right: 1px solid var(--paper-200); background: #fbfaf7; }
+      .diverge .record { background: color-mix(in srgb, var(--fix) 6%, #fbfaf7); }
+      .diverge .side { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-400); }
+      .diverge .val { font-family: var(--mono); font-size: 13px; color: var(--ink); margin-top: 6px; }
+      .next {
+        margin-top: 34px; border: 1px solid color-mix(in srgb, var(--fix) 35%, var(--paper-200));
+        background: color-mix(in srgb, var(--fix) 7%, white); padding: 22px 24px; border-radius: 2px;
+      }
+      .next h3 { font-family: var(--display); font-weight: 600; font-size: 17px; }
+      .next p { color: var(--ink-700); margin-top: 8px; max-width: 64ch; }
+      .next .cta {
+        display: inline-block; margin-top: 14px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.04em;
+        background: var(--fix); color: white; padding: 9px 16px; text-decoration: none;
+      }
+      .fine { margin-top: 30px; font-size: 12px; color: var(--ink-500); }
+      .fine h4 { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-400); margin-bottom: 8px; }
+      .fine ul { margin-left: 16px; }
+      .fine li { margin: 4px 0; }
+      .foot { margin-top: 34px; padding-top: 14px; border-top: 1px solid var(--paper-200); display: flex; justify-content: space-between; align-items: center; }
+      @page { size: letter; margin: 16mm; }
+      @media print {
+        body { background: #fff; }
+        .page { padding: 0; max-width: none; }
+        .sheet, .finding, .next, .strip { break-inside: avoid; }
+        .section { break-inside: avoid-page; }
+        * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      }
+    </style>
+  </head>
+
+  <body>
+    <main class="page">
+      <header class="head">
+        <span class="brand">
+          <svg width="26" height="26" viewBox="0 0 256 256" aria-hidden="true">
+            <g fill="none" stroke-linecap="butt" stroke-width="12">
+              <line x1="61.5" y1="232" x2="149.5" y2="40" stroke="#182433" />
+              <line x1="70" y1="38.8" x2="210" y2="203.5" stroke="#182433" />
+              <line x1="12" y1="160.6" x2="244" y2="127.4" stroke="#0b96d6" />
+            </g>
+            <circle cx="126" cy="128.8" r="9" fill="#0b96d6" />
+          </svg>
+          <span class="name">crossbearing</span>
+        </span>
+        <span class="tag">read-only · agent attribution audit</span>
+      </header>
+
+      <div class="eyebrow">Agent Attribution Audit</div>
+      <div class="meta">
+        <div>
+          <div class="k">Prepared for</div>
+          <div class="v">{{with .PreparedFor}}{{.}}{{else}}—{{end}}</div>
+        </div>
+        <div>
+          <div class="k">AWS account</div>
+          <div class="v mono">{{.Account}}</div>
+        </div>
+        <div>
+          <div class="k">Window</div>
+          <div class="v">{{.Window}}</div>
+        </div>
+        <div>
+          <div class="k">Generated</div>
+          <div class="v">{{.Generated}}</div>
+        </div>
+      </div>
+
+      <hr class="rule" />
+
+      {{if eq .Mode "unattributed"}}
+      <h1 class="headline">
+        Of {{.Sessions}} agent sessions in this window,
+        <em>{{.UnattributedN}} production-touching {{.ActionWord}}</em>
+        trace{{.TraceSuffix}} to no named human.
+      </h1>
+      <p class="subhead">
+        Your cloud recorded each one. Nothing in your organization can say which agent run,
+        or which person, they belong to. These are the lines an auditor circles.
+      </p>
+      {{else if eq .Mode "divergent"}}
+      <h1 class="headline">
+        Every recorded action here <em>traces to a named human</em>. But
+        <em>{{.DivergentN}} agent {{.ClaimWord}}</em> diverge{{.DivergeSuffix}} from the record.
+      </h1>
+      <p class="subhead">
+        No production action is orphaned. Where the agent's own account disagrees with what
+        your cloud logged is below. A receipt alone would miss that gap.
+      </p>
+      {{else}}
+      <h1 class="headline">
+        Every production-touching action in this window <em>traces to a named human.</em>
+      </h1>
+      <p class="subhead">
+        Across {{.Sessions}} agent sessions, your cloud's own record binds each action to a
+        person, and each claim matches the record. That is the answer an auditor wants. Most
+        accounts can't give it.
+      </p>
+      {{end}}
+
+      <div class="strip" style="grid-template-columns: repeat({{len .Stats}}, 1fr)">
+        {{range .Stats}}
+        <div class="stat{{if .Flag}} flag{{end}}">
+          <div class="n">{{.N}}</div>
+          <div class="l">{{.Label}}</div>
+        </div>
+        {{end}}
+      </div>
+      {{with .StreamsLine}}<p class="tick" style="margin-top: 10px">{{.}}</p>{{end}}
+
+      {{if .HasAgentSuspect}}
+      <section class="section">
+        <h2><span class="idx">01a</span> Agent-suspect — fingerprinted to an agent</h2>
+        <p class="lede">
+          These {{len .UnattributedAgentSuspect}} unattributed actions carry an agent
+          fingerprint — a proven credential session or a named role session — so they are the
+          ones to look at first. The full unattributed set, including same-principal bystander
+          activity, is in 01 below; nothing here is removed from it.
+        </p>
+        <div class="findings">
+          {{range .UnattributedAgentSuspect}}
+          <div class="finding sheet">
+            <div class="op">{{.Operation}} <span class="badge">agent-suspect</span></div>
+            <div class="kv">
+              {{range .KVs}}<div class="k">{{.K}}</div><div class="v mono">{{.V}}</div>{{end}}
+            </div>
+            <div class="why">{{.Reason}}</div>
+            <div class="prov"><span class="loc">{{.Locator}}</span> · {{.Digest}} · re-fetchable</div>
+          </div>
+          {{end}}
+        </div>
+      </section>
+      {{end}}
+
+      {{if .HasUnattributed}}
+      <section class="section">
+        <h2><span class="idx">01</span> Production-touching actions with no named human</h2>
+        <p class="lede">
+          A production-scoped action your cloud recorded, attributable to an agent
+          credential session but to no person. SourceIdentity is opt-in: unless the role's
+          trust policy requires it and the caller sets it on AssumeRole, the field is empty
+          and nothing binds the action to a human (STS SourceIdentity, a session tag, or
+          Kubernetes impersonation).
+        </p>
+        <div class="findings">
+          {{range .Unattributed}}
+          <div class="finding sheet">
+            <div class="op">{{.Operation}} <span class="badge">{{.Badge}}</span></div>
+            <div class="kv">
+              {{range .KVs}}<div class="k">{{.K}}</div><div class="v mono">{{.V}}</div>{{end}}
+            </div>
+            <div class="why">{{.Why}}</div>
+            <div class="prov"><span class="loc">{{.Locator}}</span> · {{.Digest}} · re-fetchable</div>
+          </div>
+          {{end}}
+        </div>
+      </section>
+      {{end}}
+
+      {{if .HasDivergences}}
+      <section class="section">
+        <h2><span class="idx">{{if .HasUnattributed}}02{{else}}01{{end}}</span> Divergences — claim vs. record</h2>
+        <p class="lede">
+          The agent's own account said one thing; your cloud recorded another, in the same
+          window. The claim side is the agent's story. These are where it disagrees with the
+          record.
+        </p>
+        <div class="findings">
+          {{range .Divergences}}
+          <div class="finding sheet">
+            <div class="diverge">
+              <div class="claim">
+                <div class="side">Agent claimed</div>
+                <div class="val">{{.ClaimValue}}</div>
+              </div>
+              <div class="record">
+                <div class="side">Cloud recorded</div>
+                <div class="val">{{.RecordValue}}</div>
+              </div>
+            </div>
+            <div class="kv">
+              {{range .KVs}}<div class="k">{{.K}}</div><div class="v">{{.V}}</div>{{end}}
+            </div>
+            <div class="prov">
+              {{if .ClaimLocator}}claim <span class="loc">{{.ClaimLocator}}</span>{{end}}
+              {{if .RecordLocator}}⇄ record <span class="loc">{{.RecordLocator}}</span>{{end}}
+            </div>
+          </div>
+          {{end}}
+        </div>
+      </section>
+      {{end}}
+
+      <div class="next">
+        <h3>What this is, and what makes it continuous</h3>
+        <p>
+          This is a snapshot from a single window, produced from read-only access to logs you
+          already keep. The <strong>Agent Audit-Readiness engagement</strong> wires the
+          attribution conventions so it runs continuously, maps every finding to the controls
+          in your next audit (SOC&nbsp;2 CC6.1 / CC7.2 / CC8.1; ISO&nbsp;42001 Annex&nbsp;A
+          A.3.2 / A.6.2.8 / A.6.2.6), and seals it into an Agent Evidence Package your auditor
+          can verify without us: hash-chained, signed under your own KMS key.
+        </p>
+        <a class="cta" href="mailto:hello@crossbearing.dev?subject=crossbearing%20attribution%20audit%20%E2%86%92%20engagement">Make it continuous →</a>
+      </div>
+
+      <div class="fine">
+        <h4>How this was produced</h4>
+        <ul>
+          <li>
+            <strong>Read-only.</strong> No proxy, no hook, nothing in the agent path; the
+            engine consumes logs you already keep and no data left your account.
+          </li>
+          <li>
+            <strong>Corroborated.</strong> What each agent claimed (a Claude Code transcript
+            or Bedrock invocation log) was joined against your cloud's own record by window
+            and operation. The engine reads five record streams out of the box: CloudTrail,
+            GitHub audit, Kubernetes audit, GCP Cloud Audit Logs, and Azure Activity Log.
+          </li>
+          <li>
+            <strong>Re-fetchable, not asserted.</strong> Every finding carries a locator +
+            SHA-256 digest of the raw event. Your team or your auditor can resolve each one
+            independently.
+          </li>
+        </ul>
+      </div>
+
+      <div class="foot">
+        <span class="brand">
+          <svg width="18" height="18" viewBox="0 0 256 256" aria-hidden="true">
+            <g fill="none" stroke-linecap="butt" stroke-width="14">
+              <line x1="61.5" y1="232" x2="149.5" y2="40" stroke="#182433" />
+              <line x1="70" y1="38.8" x2="210" y2="203.5" stroke="#182433" />
+              <line x1="12" y1="160.6" x2="244" y2="127.4" stroke="#0b96d6" />
+            </g>
+            <circle cx="126" cy="128.8" r="10" fill="#0b96d6" />
+          </svg>
+          <span class="tick">crossbearing · agent evidence</span>
+        </span>
+        <span class="tick">read-only · in your account · independently verifiable</span>
+      </div>
+    </main>
+  </body>
+</html>

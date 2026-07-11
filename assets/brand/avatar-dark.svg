@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Crossbearing avatar (dark)">
+  <rect width="256" height="256" fill="#132438"/>
+  <g fill="none" stroke-linecap="butt" stroke-width="10">
+    <line x1="61.5" y1="232" x2="149.5" y2="40"  stroke="#F2EFE9"/>
+    <line x1="70"   y1="38.8" x2="210" y2="203.5" stroke="#F2EFE9"/>
+    <line x1="12"   y1="160.6" x2="244" y2="127.4" stroke="#FF5A1F"/>
+  </g>
+  <circle cx="126" cy="128.8" r="7.5" fill="#FF5A1F"/>
+</svg>

@@ -1,0 +1,3 @@
+[
+  {"eventVersion":"1.09","eventID":"ct-r3","eventTime":"2026-06-26T10:00:40Z","eventSource":"s3.amazonaws.com","eventName":"CreateBucket","awsRegion":"us-east-1","readOnly":false,"userIdentity":{"type":"AssumedRole","arn":"arn:aws:sts::111122223333:assumed-role/agent-runtime/sessA","accountId":"111122223333","accessKeyId":"ASIAAGENTRT00001"},"resources":[{"ARN":"arn:aws:s3:::payments-prod-exports","type":"AWS::S3::Bucket"}]}
+]

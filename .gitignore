@@ -1,0 +1,11 @@
+/crossbearing
+/dist/
+*.test
+*.out
+.DS_Store
+.env
+.idea/
+.vscode/
+
+# agent context, local-only
+CLAUDE.md

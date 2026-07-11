@@ -1,0 +1,42 @@
+crossbearing divergence report
+  window   2026-06-16 13:30:05Z → 2026-06-16 14:32:04Z (offline (captured CloudTrail))
+  session  deploy-2026-06-16
+           agent=claude-code human=UNATTRIBUTED (unattributed) active 2026-06-16 14:00:05Z → 2026-06-16 14:02:04Z
+  claims   3 in transcript · 3 record-corroborable (aws CLI vocabulary)
+  records  4 in window · 4 joined (no principal filter)
+
+  unattributed 1 · mismatch 0 · unclaimed-record 0 · unrecorded-claim 0 · corroborated 3
+
+ATTRIBUTION
+  agent session deploy-2026-06-1… ⇄ credential session deploy-bot@2026-06-16T14:00:07Z key=ASIADEPLOYBOT0001
+    corroborated · human=UNATTRIBUTED (unattributed) · evidence: 1 item(s)
+  agent session deploy-2026-06-1… ≈ credential session system:serviceaccount:agents:agent-deployer@2026-06-16T14:01:03Z
+    window-overlap · human=UNATTRIBUTED (unattributed) · evidence: 0 item(s)
+
+UNATTRIBUTED (1)
+  record  s3:CreateBucket at 14:05:30Z by arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot
+          event ct-2
+  why     production-touching action with agent fingerprints and no named human binding
+
+
+CORROBORATED (3)
+  claim   Bash(aws sts get-caller-identity --output json) at 14:00:05Z
+  record  sts:GetCallerIdentity at 14:00:07Z by arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot
+          event ct-1
+  why     claim corroborated by aws-cloudtrail record ct-1
+
+  claim   Bash(kubectl create deployment api --image=registry/api:v2 -n prod) at 14:01:00Z
+  record  k8s-audit:create:deployments at 14:01:03Z by system:serviceaccount:agents:agent-deployer
+          event k8s-1
+  why     claim corroborated by k8s-audit record k8s-1
+
+  claim   Bash(git push origin main) at 14:02:00Z
+  record  github-audit:git.push at 14:02:04Z by deploy-bot
+          event gh-1
+  why     claim corroborated by github-audit record gh-1
+
+
+AGENT-SUSPECT (1 of 1 unattributed)
+  record       s3:CreateBucket by arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot (event ct-2)
+  fingerprint  credential session proven to be the agent's by corroborated record ct-1
+
