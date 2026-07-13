@@ -141,7 +141,7 @@ func TestDeriveOperationMap(t *testing.T) {
 	if len(m) != 1 {
 		t.Fatalf("map size = %d, want 1 (only the aws CLI claim derives)", len(m))
 	}
-	got := m["Bash(aws sts get-caller-identity --profile stxkxs)"]
+	got := m["aws sts get-caller-identity --profile stxkxs"]
 	if want := []string{"sts:GetCallerIdentity"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("entry = %v, want %v (deduped)", got, want)
 	}

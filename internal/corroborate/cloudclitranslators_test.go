@@ -138,10 +138,10 @@ func TestDeriveOperationMap_CloudCLITranslators(t *testing.T) {
 		{Operation: "Bash(az vm create -g rg -n api)", Target: "az vm create -g rg -n api"},
 	}
 	m := DeriveOperationMap(claims)
-	if got := m["Bash(gcloud storage buckets create gs://x)"]; len(got) != 1 || got[0] != "gcp-audit:storage.buckets.create" {
+	if got := m["gcloud storage buckets create gs://x"]; len(got) != 1 || got[0] != "gcp-audit:storage.buckets.create" {
 		t.Errorf("gcloud entry = %v", got)
 	}
-	if got := m["Bash(az vm create -g rg -n api)"]; len(got) != 1 || got[0] != "azure-activity:Microsoft.Compute/virtualMachines/write" {
+	if got := m["az vm create -g rg -n api"]; len(got) != 1 || got[0] != "azure-activity:Microsoft.Compute/virtualMachines/write" {
 		t.Errorf("az entry = %v", got)
 	}
 }

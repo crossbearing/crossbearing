@@ -109,7 +109,7 @@ func runReport(args []string) error {
 	fs.StringVar(&p.azureAudit, "azure-audit", "", "Azure Activity Log file (az monitor activity-log list -o json) to join as a record stream")
 	fs.StringVar(&p.azureSub, "azure-subscription", "", "Azure subscription the activity log belongs to (anchors provenance locators)")
 	fs.StringVar(&p.cloudtrailFile, "aws-cloudtrail", "", "captured CloudTrail events (JSON array of event objects); replaces the live API — runs offline, no AWS creds")
-	fs.StringVar(&p.productionMatch, "production-match", "", "substring marking a record target as production-touching; an unclaimed production action with no human binding escalates to Unattributed")
+	fs.StringVar(&p.productionMatch, "production-match", "", "comma-separated substrings marking a record target as production-touching; an unclaimed production action with no human binding escalates to Unattributed")
 	fs.StringVar(&p.format, "format", "text", "output format: text (the operator report) or html (the print-to-PDF Agent Attribution Audit)")
 	fs.StringVar(&p.preparedFor, "prepared-for", "", "organization name on the report cover (html only)")
 	fs.StringVar(&p.color, "color", "auto", "colorize the text report: auto (only when stdout is a terminal) / always / never; NO_COLOR is honored")
@@ -198,13 +198,25 @@ func runReportPipeline(ctx context.Context, client *aws.Client, p reportParams, 
 		to = now
 	}
 
-	// A target is production-touching when it matches --production-match;
-	// the same scope applies to every stream so an unclaimed production
+	// A target is production-touching when it matches any --production-match
+	// term; the same scope applies to every stream so an unclaimed production
 	// action with no human binding escalates to Unattributed.
+	//
+	// A list, not one substring: production is rarely a single prefix. On a
+	// cluster it is a set of namespaces (argocd, monitoring, kube-system) and
+	// in an account a set of ARN fragments, and an operator who can only name
+	// one of them silently under-scopes the report — which reads as a clean
+	// cluster rather than an unmeasured one.
 	var isProd func(string) bool
-	if p.productionMatch != "" {
-		m := p.productionMatch
-		isProd = func(target string) bool { return strings.Contains(target, m) }
+	if terms := splitTerms(p.productionMatch); len(terms) > 0 {
+		isProd = func(target string) bool {
+			for _, m := range terms {
+				if strings.Contains(target, m) {
+					return true
+				}
+			}
+			return false
+		}
 	}
 
 	var ctAPI cloudtrail.EventsAPI
@@ -289,7 +301,7 @@ func runReportPipeline(ctx context.Context, client *aws.Client, p reportParams, 
 	)
 	var scoped []corroborate.Claim
 	for _, c := range claimSide.Claims {
-		if len(policy.OperationMap[c.Operation]) > 0 {
+		if len(policy.OperationMap[corroborate.ClaimKey(c)]) > 0 {
 			scoped = append(scoped, c)
 		}
 	}
@@ -716,4 +728,16 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// splitTerms parses a comma-separated flag value into its non-empty,
+// space-trimmed terms.
+func splitTerms(s string) []string {
+	var out []string
+	for _, t := range strings.Split(s, ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }

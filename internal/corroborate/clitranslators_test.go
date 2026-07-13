@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestKubectlRecordOps(t *testing.T) {
@@ -156,11 +157,48 @@ func TestDeriveOperationMap_AllTranslators(t *testing.T) {
 	if len(m) != 3 {
 		t.Fatalf("map entries = %d, want 3: %v", len(m), m)
 	}
-	if got := m["Bash(kubectl delete deployment api -n prod)"]; got[0] != "k8s-audit:delete:deployments" {
+	// Entries key on the command (ClaimKey), not the report summary the
+	// Operation carries — distinct commands must not share a translation.
+	if got := m["kubectl delete deployment api -n prod"]; got[0] != "k8s-audit:delete:deployments" {
 		t.Errorf("kubectl entry = %v", got)
 	}
-	if got := m["Bash(git push origin main)"]; len(got) != 1 || got[0] != "github-audit:git.push" {
+	if got := m["git push origin main"]; len(got) != 1 || got[0] != "github-audit:git.push" {
 		t.Errorf("git push entry = %v", got)
+	}
+}
+
+// Agent shell scripts routinely share a first line ("export PATH=…", "set
+// -euo pipefail"), and the Operation is only that first line. If the
+// translation keyed on it, two different scripts would pool their record
+// ops — and the matcher would then accept either script's record as
+// corroboration for the other's claim. A claim that read a secret would be
+// "corroborated" by a record that deleted a Deployment, and the deletion
+// would vanish from the divergence report as accounted for.
+func TestDeriveOperationMap_SharedFirstLineDoesNotPoolOps(t *testing.T) {
+	t.Parallel()
+	const firstLine = "export PATH=\"/opt/homebrew/bin\""
+	read := Claim{
+		Operation: "Bash(" + firstLine + ")",
+		Target:    firstLine + "\nK=kubectl\n$K -n argocd get secret argocd-initial-admin-secret",
+	}
+	destroy := Claim{
+		Operation: "Bash(" + firstLine + ")",
+		Target:    firstLine + "\nK=kubectl\n$K -n prod delete deploy/api",
+	}
+	m := DeriveOperationMap([]Claim{read, destroy})
+
+	if len(m) != 2 {
+		t.Fatalf("map entries = %d, want 2 — the two scripts pooled into one key: %v", len(m), m)
+	}
+	p := MatchPolicy{Window: time.Minute, OperationMap: m}
+	if operationsAgree(read, "k8s-audit:delete:deployments", p) {
+		t.Error("a secret-read claim agreed with a Deployment deletion — false corroboration hides the divergence it should report")
+	}
+	if !operationsAgree(read, "k8s-audit:get:secrets", p) {
+		t.Error("the secret-read claim no longer agrees with its own record")
+	}
+	if !operationsAgree(destroy, "k8s-audit:delete:deployments", p) {
+		t.Error("the deletion claim no longer agrees with its own record")
 	}
 }
 

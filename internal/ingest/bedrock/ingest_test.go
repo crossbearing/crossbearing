@@ -98,7 +98,7 @@ func TestIngest_ConverseExecutedClaim(t *testing.T) {
 func TestIngest_DerivedOperationMeetsK8sRecord(t *testing.T) {
 	res := ingestString(t, conversePair, Options{SessionKey: "session"})
 	m := corroborate.DeriveOperationMap(res.Claims)
-	ops := m[res.Claims[0].Operation]
+	ops := m[corroborate.ClaimKey(res.Claims[0])]
 	want := "k8s-audit:update:deployments/scale"
 	found := false
 	for _, o := range ops {

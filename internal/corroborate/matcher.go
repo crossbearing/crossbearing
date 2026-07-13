@@ -77,7 +77,7 @@ func Join(sessions []Session, claims []Claim, records []Record, p MatchPolicy) R
 					Kind: UnrecordedClaim, SessionID: s.ID, Claim: &sc[i],
 					Why: "no infrastructure record corroborates this claim within the match window",
 				})
-			case operationsAgree(c.Operation, rec.Operation, p):
+			case operationsAgree(c, rec.Operation, p):
 				usedRecords[rec.ID] = true
 				rep.Findings = append(rep.Findings, Finding{
 					Kind: Corroborated, SessionID: s.ID, Claim: &sc[i], Record: rec,
@@ -138,7 +138,7 @@ func bestRecord(c Claim, records []Record, used map[string]bool, p MatchPolicy) 
 		if gap > p.Window {
 			continue
 		}
-		agrees := operationsAgree(c.Operation, r.Operation, p)
+		agrees := operationsAgree(c, r.Operation, p)
 		betterClass := agrees && !bestAgrees
 		sameClassCloser := agrees == bestAgrees && (best == nil || gap < bestGap)
 		if best == nil || betterClass || sameClassCloser {
@@ -148,11 +148,16 @@ func bestRecord(c Claim, records []Record, used map[string]bool, p MatchPolicy) 
 	return best, best != nil
 }
 
-func operationsAgree(claimOp, recordOp string, p MatchPolicy) bool {
-	if claimOp == recordOp {
+// operationsAgree reports whether a record is a legitimate product of this
+// claim. The claim is looked up by ClaimKey, not by its Operation string:
+// a shell claim's Operation is a lossy summary that distinct commands
+// share, and translating them as one would let any of them corroborate any
+// other's record.
+func operationsAgree(c Claim, recordOp string, p MatchPolicy) bool {
+	if c.Operation == recordOp {
 		return true
 	}
-	for _, mapped := range p.OperationMap[claimOp] {
+	for _, mapped := range p.OperationMap[ClaimKey(c)] {
 		if mapped == recordOp {
 			return true
 		}
