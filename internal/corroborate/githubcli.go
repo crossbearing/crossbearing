@@ -11,7 +11,7 @@ import "strings"
 // actually reaches GitHub, and the org audit log records it as git.push.
 func GHCLIRecordOps(command string) []string {
 	var ops []string
-	for _, seg := range shellSegments(command) {
+	for _, seg := range shellCommands(command) {
 		if op, ok := ghInvocation(seg); ok {
 			ops = append(ops, op)
 		}
@@ -39,7 +39,7 @@ func ghInvocation(tokens []string) (string, bool) {
 	for i < len(tokens) && (isEnvAssign(tokens[i]) || commandWrappers[tokens[i]]) {
 		i++
 	}
-	if i >= len(tokens) || tokens[i] != "gh" {
+	if i >= len(tokens) || !isCommand(tokens[i], "gh") {
 		return "", false
 	}
 	i++
@@ -66,7 +66,7 @@ func gitPushInvocation(tokens []string) bool {
 	for i < len(tokens) && (isEnvAssign(tokens[i]) || commandWrappers[tokens[i]]) {
 		i++
 	}
-	if i >= len(tokens) || tokens[i] != "git" {
+	if i >= len(tokens) || !isCommand(tokens[i], "git") {
 		return false
 	}
 	i++

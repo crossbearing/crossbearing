@@ -57,7 +57,7 @@ func DeriveOperationMap(claims []Claim) map[string][]string {
 // nothing.
 func AWSCLIRecordOps(command string) []string {
 	var ops []string
-	for _, seg := range shellSegments(command) {
+	for _, seg := range shellCommands(command) {
 		if op, ok := awsInvocation(seg); ok {
 			ops = append(ops, op)
 		}
@@ -98,7 +98,7 @@ func awsInvocation(tokens []string) (string, bool) {
 	for i < len(tokens) && (isEnvAssign(tokens[i]) || commandWrappers[tokens[i]]) {
 		i++
 	}
-	if i >= len(tokens) || tokens[i] != "aws" {
+	if i >= len(tokens) || !isCommand(tokens[i], "aws") {
 		return "", false
 	}
 	i++
