@@ -72,6 +72,77 @@ func TestShellCommands_RealAgentScripts(t *testing.T) {
 	}
 }
 
+// A script that runs forty commands has claimed forty things. Ingesting it
+// as one claim leaves the join 1:1 against forty records — one corroborates
+// and thirty-nine read as unclaimed, which is the engine accusing an agent
+// of concealing work it wrote down in the same breath.
+func TestCLIInvocations(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		command string
+		want    []string
+	}{
+		{
+			name: "the real restart script: setup lines drop out, the commands survive",
+			command: "export PATH=\"/opt/homebrew/bin\"\n" +
+				"K=/usr/local/bin/kubectl\n" +
+				"echo \"=== restart alloy ===\"\n" +
+				"$K -n monitoring rollout restart ds/alloy 2>&1\n" +
+				"$K -n monitoring rollout status ds/alloy --timeout=150s 2>&1 | tail -2",
+			want: []string{
+				"/usr/local/bin/kubectl -n monitoring rollout restart ds/alloy",
+				"/usr/local/bin/kubectl -n monitoring rollout status ds/alloy --timeout=150s",
+			},
+		},
+		{
+			name:    "commands the audit logs cannot hold are not claimed",
+			command: "echo hi\nsleep 5\njq -r .items[] < in.json\npython3 -c 'print(1)'",
+			want:    nil,
+		},
+		{
+			name:    "mixed CLIs across streams, in order",
+			command: "aws sts get-caller-identity\nkubectl -n prod delete deploy/api\ngit push origin main",
+			want: []string{
+				"aws sts get-caller-identity",
+				"kubectl -n prod delete deploy/api",
+				"git push origin main",
+			},
+		},
+		{
+			name:    "redirection is plumbing, not an argument",
+			command: "kubectl get pods -n prod > /tmp/out.txt 2>&1",
+			want:    []string{"kubectl get pods -n prod"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := CLIInvocations(tt.command); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("CLIInvocations() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+// Each invocation CLIInvocations returns becomes a claim's Target, and every
+// translator reads the command back out of that Target. If the
+// reconstruction did not re-parse to what it came from, the split claims
+// would translate to nothing and the join would lose them all.
+func TestCLIInvocations_RoundTrip(t *testing.T) {
+	t.Parallel()
+	const script = "K=kubectl\n$K -n prod delete deploy/api 2>&1\n$K -n argocd get secret x -o json"
+	invocations := CLIInvocations(script)
+	if len(invocations) != 2 {
+		t.Fatalf("invocations = %v, want 2", invocations)
+	}
+	for _, inv := range invocations {
+		if ops := KubectlRecordOps(inv); len(ops) == 0 {
+			t.Errorf("reconstructed %q translates to nothing — it does not re-parse", inv)
+		}
+	}
+}
+
 // Resolution must not manufacture a translation. Each case below is a
 // command we cannot confidently read, and inventing an operation for it
 // would corroborate a claim against the wrong record — the one failure

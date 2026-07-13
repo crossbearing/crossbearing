@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/crossbearing/crossbearing/internal/corroborate"
@@ -122,7 +123,7 @@ func (g *Ingester) Ingest(r io.Reader, locator string) (Result, error) {
 	}
 	sort.Slice(claims, func(i, j int) bool { return claims[i].order < claims[j].order })
 	for _, pc := range claims {
-		res.Claims = append(res.Claims, pc.claim)
+		res.Claims = append(res.Claims, expand(pc.claim)...)
 	}
 
 	res.Sessions = g.sessions(windows, locator)
@@ -130,6 +131,44 @@ func (g *Ingester) Ingest(r io.Reader, locator string) (Result, error) {
 		"locator", locator, "lines", lineNo,
 		"claims", len(res.Claims), "sessions", len(res.Sessions))
 	return res, nil
+}
+
+// expand turns one executed tool call into the claims it actually made.
+//
+// Every tool call yields one claim, except a shell command that runs more
+// than one recognized CLI invocation: that is a script, and a script claims
+// each of its commands separately. Modeling it as a single claim would let
+// it corroborate only one of the records it produced and leave the rest
+// looking unclaimed — the engine reporting hidden work that the agent wrote
+// down in plain sight.
+//
+// The split claims share the tool call's provenance verbatim: the locator
+// and digest still point at the one transcript line where all of these
+// commands are written, so each remains independently re-fetchable. Their
+// IDs suffix the tool-use ID with the invocation's position, which keeps
+// them unique (the matcher consumes records per claim) and keeps the
+// original tool call readable in the ID.
+//
+// A shell command with no recognized invocation stays exactly one claim.
+// It may still be a real action (a `terraform apply`, a curl to some API),
+// and dropping it would erase the claim rather than fail to corroborate it.
+func expand(c corroborate.Claim) []corroborate.Claim {
+	if !strings.HasPrefix(c.Operation, "Bash(") {
+		return []corroborate.Claim{c}
+	}
+	invocations := corroborate.CLIInvocations(c.Target)
+	if len(invocations) <= 1 {
+		return []corroborate.Claim{c}
+	}
+	out := make([]corroborate.Claim, 0, len(invocations))
+	for i, inv := range invocations {
+		split := c
+		split.ID = fmt.Sprintf("%s#%d", c.ID, i)
+		split.Operation = "Bash(" + truncateCommand(inv) + ")"
+		split.Target = inv
+		out = append(out, split)
+	}
+	return out
 }
 
 // ingestLine folds one JSONL line into the accumulators; false means the

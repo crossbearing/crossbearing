@@ -39,11 +39,121 @@ func shellCommands(cmd string) [][]string {
 		} else {
 			seg = rest
 		}
-		if len(seg) > 0 {
+		if seg = stripRedirections(seg); len(seg) > 0 {
 			out = append(out, seg)
 		}
 	}
 	return out
+}
+
+// stripRedirections drops I/O redirection from a segment: it plumbs the
+// command's output and says nothing about what the command did. Leaving it
+// in would put `2>` and a filename among the command's arguments, where a
+// filename can be misread as a resource name and every reconstructed
+// command line trails a fragment of shell syntax.
+func stripRedirections(seg []string) []string {
+	out := make([]string, 0, len(seg))
+	for i := 0; i < len(seg); i++ {
+		t := seg[i]
+		if !isRedirect(t) {
+			out = append(out, t)
+			continue
+		}
+		// `> file` and `2> file` take the next token as their target;
+		// `2>&1` and `>file` carry it already.
+		if t[len(t)-1] == '>' || t[len(t)-1] == '<' {
+			i++
+		}
+	}
+	return out
+}
+
+// isRedirect reports whether a token is a redirection operator, with or
+// without an attached target: > >> < 2> &> 2>&1 >file.
+func isRedirect(t string) bool {
+	i := 0
+	for i < len(t) && t[i] >= '0' && t[i] <= '9' { // an optional fd number
+		i++
+	}
+	if i < len(t) && t[i] == '&' && i == 0 { // &> and &>>
+		i++
+	}
+	return i < len(t) && (t[i] == '>' || t[i] == '<')
+}
+
+// CLIInvocations returns the individual CLI commands a shell command runs
+// — one string per invocation that at least one translator recognizes,
+// with variables resolved and in execution order.
+//
+// A shell claim is not one action. Agents work by writing scripts, and a
+// script that calls kubectl forty times has claimed forty things; the
+// transcript records it as a single Bash tool call only because that is the
+// vehicle, not because it is one deed. Ingesting it as one Claim leaves the
+// join 1:1 against forty records, so one corroborates and thirty-nine are
+// reported unclaimed — the engine accusing an agent of hiding work it
+// announced in the very same command. On the dev-eks corpus that was 1,560
+// real commands modeled as 379 claims, and 902 records falsely unclaimed.
+//
+// Splitting here is what makes a claim mean one action again. Callers emit
+// one Claim per invocation, all sharing the tool call's provenance: the
+// evidence still points at exactly one transcript line, which is where every
+// one of these commands is written down.
+//
+// Only recognized invocations are returned. A script's `echo`, `sleep` and
+// `jq` lines produce no records in any stream, so claiming them would
+// manufacture unrecorded-claim findings for work no audit log was ever going
+// to hold.
+//
+// The known imprecision: a command inside a branch or loop that did not
+// execute is still claimed, because the tool_result proves the script ran,
+// not which lines it reached. That over-claims toward UnrecordedClaim — an
+// agent credited with something no record shows — which is the safe
+// direction. The unsafe direction would be crediting a record to a claim
+// that never ran, and that stays impossible: an invocation the script does
+// not contain is never emitted.
+func CLIInvocations(command string) []string {
+	var out []string
+	for _, seg := range shellCommands(command) {
+		if len(seg) == 0 {
+			continue
+		}
+		line := joinTokens(seg)
+		for _, translate := range cliTranslators {
+			if len(translate(line)) > 0 {
+				out = append(out, line)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// joinTokens rebuilds a runnable command line from resolved tokens, quoting
+// any token the lexer would otherwise re-split. The result must re-parse to
+// the tokens it came from, because it becomes the claim's Target and every
+// translator reads it again from there.
+func joinTokens(tokens []string) string {
+	var b strings.Builder
+	for i, t := range tokens {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(shellQuote(t))
+	}
+	return b.String()
+}
+
+// shellQuote single-quotes a token that would not survive re-lexing intact.
+func shellQuote(t string) string {
+	if t == "" {
+		return "''"
+	}
+	if !strings.ContainsAny(t, " \t\n'\"\\;|&()<>$`*?#") {
+		return t
+	}
+	// Single quotes protect everything but a single quote, which must leave
+	// and re-enter the quoted run.
+	return "'" + strings.ReplaceAll(t, "'", `'\''`) + "'"
 }
 
 // declarations records the variable assignments a segment makes and
