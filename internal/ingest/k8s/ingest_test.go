@@ -3,6 +3,7 @@ package k8s
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -151,6 +152,107 @@ func TestIngest_SystemUsersNeverBindToThemselves(t *testing.T) {
 	s := res.Sessions[0]
 	if s.Human != "" {
 		t.Errorf("system identity bound to itself: %q", s.Human)
+	}
+}
+
+// eksSSOUser is how EKS spells an IAM-authenticated principal: the STS
+// ARN, with the SSO login name sitting in the role-session slot. It reads
+// like a person and is not one — every admin who assumes the role produces
+// this same byte-identical username.
+const eksSSOUser = "arn:aws:sts::351619759866:assumed-role/AWSReservedSSO_AdministratorAccess_1bd3786dce786114/sysadmin"
+
+// eksEvent fabricates an EKS audit Event, including the user.extra map
+// aws-iam-authenticator attaches. Shape taken verbatim from a live
+// dev-eks audit log.
+func eksEvent(id, verb, user, accessKey string, at time.Time) string {
+	extra := ""
+	if accessKey != "" {
+		extra = fmt.Sprintf(`,"extra":{"accessKeyId":[%q],"arn":[%q],"canonicalArn":["arn:aws:iam::351619759866:role/AWSReservedSSO_AdministratorAccess_1bd3786dce786114"],"principalId":["AROAVDXRLX35N4FPX6ZV5"],"sessionName":["sysadmin"]}`, accessKey, user)
+	}
+	return fmt.Sprintf(`{"kind":"Event","apiVersion":"audit.k8s.io/v1","auditID":%q,"stage":"ResponseComplete","verb":%q,"requestURI":"/apis/apps/v1/namespaces/monitoring/daemonsets/alloy?fieldManager=kubectl-rollout","user":{"username":%q,"uid":"aws-iam-authenticator:351619759866:AROAVDXRLX35N4FPX6ZV5","groups":["system:authenticated"]%s},"sourceIPs":["162.197.3.60"],"userAgent":"kubectl/v1.32.2 (darwin/arm64)","objectRef":{"resource":"daemonsets","namespace":"monitoring","name":"alloy","apiGroup":"apps"},"responseStatus":{"code":200},"requestReceivedTimestamp":%q,"stageTimestamp":%q}`,
+		id, verb, user, extra, at.Format(time.RFC3339Nano), at.Add(50*time.Millisecond).Format(time.RFC3339Nano))
+}
+
+// The bug this pins: an EKS IAM principal is a shared credential, not a
+// person. Binding it as the human would name an innocent role-session as
+// the actor of an agent's production change — a fabricated attribution,
+// which is worse than reporting none.
+func TestIngest_EKSIAMPrincipalIsNeverAHuman(t *testing.T) {
+	t.Parallel()
+	res := ingest(t, Options{}, eksEvent("audit-1", "patch", eksSSOUser, "ASIAVDXRLX35EVQSBZ5N", t0)+"\n")
+
+	s := res.Sessions[0]
+	if s.Human != "" {
+		t.Errorf("IAM role ARN bound as a human: %q — a shared SSO role is a credential, not a person", s.Human)
+	}
+	if s.Attribution.Method != corroborate.AttrNone {
+		t.Errorf("Method = %q, want %q", s.Attribution.Method, corroborate.AttrNone)
+	}
+}
+
+// The access key is the only thing separating the agent's kubectl from
+// Terraform (or a second engineer) when all three wear the same SSO role.
+// It is also exactly what CloudTrail records, so it is the join between
+// the two planes.
+func TestIngest_AccessKeySeparatesASharedPrincipal(t *testing.T) {
+	t.Parallel()
+	const agentKey, terraformKey = "ASIAVDXRLX35EVQSBZ5N", "ASIAVDXRLX35HYL2W4X3"
+	res := ingest(t, Options{}, strings.Join([]string{
+		eksEvent("audit-1", "patch", eksSSOUser, agentKey, t0),
+		eksEvent("audit-2", "get", eksSSOUser, terraformKey, t0.Add(time.Minute)),
+		eksEvent("audit-3", "delete", eksSSOUser, agentKey, t0.Add(2*time.Minute)),
+	}, "\n")+"\n")
+
+	if len(res.Records) != 3 {
+		t.Fatalf("records = %d, want 3", len(res.Records))
+	}
+	if got := res.Records[0].AccessKeyID; got != agentKey {
+		t.Errorf("Record.AccessKeyID = %q, want %q — the CloudTrail join key", got, agentKey)
+	}
+	// One username, one time window, two credential sessions.
+	if len(res.Sessions) != 2 {
+		t.Fatalf("sessions = %d, want 2 (one per access key); a shared principal must not merge into one session", len(res.Sessions))
+	}
+	for _, s := range res.Sessions {
+		if !strings.Contains(s.ID, agentKey) && !strings.Contains(s.ID, terraformKey) {
+			t.Errorf("session ID %q names no access key; concurrent sessions would collide", s.ID)
+		}
+	}
+}
+
+// EKS delivers audit logs through CloudWatch, so the envelope — not bare
+// audit JSONL — is the shape most real input arrives in. The Event rides
+// inside as an escaped JSON string; without unwrapping, a 90 MB log
+// ingests to exactly zero records and reports a clean cluster.
+func TestIngest_CloudWatchEnvelope(t *testing.T) {
+	t.Parallel()
+	ev := eksEvent("audit-1", "patch", eksSSOUser, "ASIAVDXRLX35EVQSBZ5N", t0)
+	msg, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct{ name, input string }{
+		{"filter-log-events batch", fmt.Sprintf(`{"events":[{"logStreamName":"kube-apiserver-audit-fed9","timestamp":1783916490602,"message":%s}],"searchedLogStreams":[]}`, msg)},
+		{"one envelope per line", fmt.Sprintf(`{"timestamp":1783916490602,"message":%s}`, msg)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			res := ingest(t, Options{}, tc.input)
+			if len(res.Records) != 1 {
+				t.Fatalf("records = %d, want 1 — the audit Event inside the CloudWatch envelope was not unwrapped", len(res.Records))
+			}
+			if res.Records[0].ID != "audit-1" {
+				t.Errorf("ID = %q, want audit-1", res.Records[0].ID)
+			}
+			// Provenance must digest the Event, not the envelope: the
+			// auditID identifies the Event, and that is what a re-fetch
+			// returns.
+			sum := sha256.Sum256([]byte(ev))
+			if got, want := res.Records[0].Raw.Digest, hex.EncodeToString(sum[:]); got != want {
+				t.Errorf("digest = %q, want the embedded Event's digest %q", got, want)
+			}
+		})
 	}
 }
 

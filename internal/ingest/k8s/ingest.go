@@ -98,6 +98,14 @@ type event struct {
 	RequestURI string `json:"requestURI"`
 	User       struct {
 		Username string `json:"username"`
+		// Extra is the authenticator's side-channel. On EKS,
+		// aws-iam-authenticator fills it with the IAM facts the username
+		// alone loses — above all accessKeyId, the exact STS credential
+		// session, which is the same value CloudTrail records. It is the
+		// join key between the two planes.
+		Extra struct {
+			AccessKeyID []string `json:"accessKeyId"`
+		} `json:"extra"`
 	} `json:"user"`
 	ImpersonatedUser *struct {
 		Username string `json:"username"`
@@ -120,6 +128,16 @@ func (e *event) at() time.Time {
 		return e.StageTimestamp
 	}
 	return e.RequestReceived
+}
+
+// accessKey is the STS credential session behind an IAM-authenticated
+// request, or "" on clusters whose authenticator does not supply one
+// (kubeadm certs, plain OIDC, in-cluster ServiceAccounts).
+func (e *event) accessKey() string {
+	if len(e.User.Extra.AccessKeyID) == 0 {
+		return ""
+	}
+	return e.User.Extra.AccessKeyID[0]
 }
 
 // effective reports whether this event is one completed, successful
@@ -149,7 +167,7 @@ func (g *Ingester) Ingest(r io.Reader) (Result, error) {
 
 	var (
 		records = []corroborate.Record{}
-		byUser  = make(map[string][]userEvent)
+		byKey   = make(map[sessionKey][]userEvent)
 		skipped int
 	)
 	for _, raw := range raws {
@@ -163,13 +181,24 @@ func (g *Ingester) Ingest(r io.Reader) (Result, error) {
 		}
 		rec := g.record(&e, raw)
 		records = append(records, rec)
-		byUser[e.User.Username] = append(byUser[e.User.Username], userEvent{rec: rec, ev: e})
+		k := sessionKey{user: e.User.Username, accessKey: e.accessKey()}
+		byKey[k] = append(byKey[k], userEvent{rec: rec, ev: e})
 	}
 	if skipped > 0 {
 		g.log.Warn("skipped undecodable k8s audit events", "events", skipped)
 	}
+	// A log that parses but yields nothing is the failure mode that looks
+	// like success: the join simply finds no k8s records and reports no
+	// divergence. It almost always means the input is not audit Events at
+	// all (a CloudWatch envelope this version cannot unwrap, the wrong log
+	// group, an authenticator/controller-manager stream), so say so rather
+	// than let a silent zero read as a clean cluster.
+	if len(records) == 0 && len(raws) > 0 {
+		g.log.Warn("k8s audit log parsed but produced no records — is this an audit stream?",
+			"cluster", g.opts.Cluster, "documents", len(raws))
+	}
 
-	sessions := g.sessions(byUser)
+	sessions := g.sessions(byKey)
 	g.log.Info("ingested k8s audit log",
 		"cluster", g.opts.Cluster, "records", len(records), "sessions", len(sessions))
 	return Result{Records: records, Sessions: sessions}, nil
@@ -196,12 +225,13 @@ func (g *Ingester) record(e *event, raw []byte) corroborate.Record {
 	}
 
 	rec := corroborate.Record{
-		ID:         e.AuditID,
-		Source:     corroborate.SourceK8sAudit,
-		Operation:  op,
-		Principal:  e.User.Username,
-		Targets:    targets,
-		RecordedAt: e.at(),
+		ID:          e.AuditID,
+		Source:      corroborate.SourceK8sAudit,
+		Operation:   op,
+		Principal:   e.User.Username,
+		AccessKeyID: e.accessKey(),
+		Targets:     targets,
+		RecordedAt:  e.at(),
 		Raw: corroborate.Provenance{
 			Locator: "k8s-audit:" + g.opts.Cluster + "#" + e.AuditID,
 			Digest:  corroborate.DigestHex(raw),
@@ -228,25 +258,37 @@ type userEvent struct {
 	ev  event
 }
 
-// sessions windows each authenticated user's activity. Binding
+// sessionKey is the unit a Session windows over: the authenticated user
+// AND the credential session behind it. The username alone is not enough
+// on EKS — an SSO role ARN is shared by everyone who assumes it, and the
+// agent's kubectl, a human's kubectl, and Terraform can all appear under
+// one identical username at the same moment. accessKeyId is what tells
+// them apart, and it is the same key CloudTrail records, which is why
+// cloudtrail's ingester keys on (principal, accessKeyId) too. Clusters
+// whose authenticator supplies no access key degrade to username-only
+// grouping, exactly as before.
+type sessionKey struct{ user, accessKey string }
+
+// sessions windows each credential session's activity. Binding
 // precedence, strongest first:
 //
 //  1. impersonatedUser on the window's events → k8s-impersonation (the
 //     cluster-enforced convention; the human is named per event).
-//  2. A non-system, non-ServiceAccount username → actor-identity (an
-//     OIDC/cert user authenticated as themselves).
-//  3. Nothing: ServiceAccounts and system users without impersonation
-//     stay unattributed — the gap the convention checker exists to name.
-func (g *Ingester) sessions(byUser map[string][]userEvent) []corroborate.Session {
+//  2. A username that names a person — an OIDC/cert user authenticated as
+//     themselves → actor-identity.
+//  3. Nothing: ServiceAccounts, system users, and IAM principals without
+//     impersonation stay unattributed — the gap the convention checker
+//     exists to name.
+func (g *Ingester) sessions(byKey map[sessionKey][]userEvent) []corroborate.Session {
 	var out []corroborate.Session
-	for user, evs := range byUser {
+	for k, evs := range byKey {
 		sort.Slice(evs, func(i, j int) bool { return evs[i].rec.RecordedAt.Before(evs[j].rec.RecordedAt) })
 		start := 0
 		for i := 1; i <= len(evs); i++ {
 			if i < len(evs) && evs[i].rec.RecordedAt.Sub(evs[i-1].rec.RecordedAt) <= g.opts.SessionGap {
 				continue
 			}
-			out = append(out, g.session(user, evs[start:i]))
+			out = append(out, g.session(k, evs[start:i]))
 			start = i
 		}
 	}
@@ -259,11 +301,17 @@ func (g *Ingester) sessions(byUser map[string][]userEvent) []corroborate.Session
 	return out
 }
 
-func (g *Ingester) session(user string, window []userEvent) corroborate.Session {
+func (g *Ingester) session(k sessionKey, window []userEvent) corroborate.Session {
 	first, last := window[0], window[len(window)-1]
+	id := "k8s:" + g.opts.Cluster + "/" + k.user + "@" + first.rec.RecordedAt.UTC().Format(time.RFC3339)
+	if k.accessKey != "" {
+		// The key suffix keeps concurrent same-username sessions distinct,
+		// mirroring the cloudtrail session ID.
+		id += "/" + k.accessKey
+	}
 	s := corroborate.Session{
-		ID:          "k8s:" + g.opts.Cluster + "/" + user + "@" + first.rec.RecordedAt.UTC().Format(time.RFC3339),
-		Agent:       user,
+		ID:          id,
+		Agent:       k.user,
 		StartedAt:   first.rec.RecordedAt,
 		EndedAt:     last.rec.RecordedAt,
 		Attribution: corroborate.Attribution{Method: corroborate.AttrNone},
@@ -288,30 +336,62 @@ func (g *Ingester) session(user string, window []userEvent) corroborate.Session 
 		return s
 	}
 
-	if isHumanUsername(user) {
+	if isHumanUsername(k.user) {
 		evidence = make([]string, 0, len(window))
 		for _, ue := range window {
 			evidence = append(evidence, ue.rec.ID)
 		}
-		s.Human = user
+		s.Human = k.user
 		s.Attribution = corroborate.Attribution{Method: corroborate.AttrActorIdentity, Evidence: evidence}
 	}
 	return s
 }
 
-// isHumanUsername separates authenticated people from machinery:
-// ServiceAccounts and the control plane's system: identities are
-// credentials, not humans.
+// isHumanUsername separates authenticated people from machinery. A human
+// username is one the platform can only have issued to a person: an OIDC
+// or client-cert subject. Everything else is a credential that a person,
+// an agent, or a CI job may equally be wearing, and naming it as the human
+// would be a fabricated attribution — the one error this product must never
+// make.
+//
+// Excluded, and why:
+//
+//   - system:… — ServiceAccounts and the control plane's own identities.
+//   - An IAM ARN — how EKS spells every IAM-authenticated principal
+//     (arn:aws:sts::123:assumed-role/AWSReservedSSO_AdminAccess_x/alice).
+//     It looks personal because SSO puts a login name in the role-session
+//     slot, but it is a *shared role*: every admin assumes the same one,
+//     and the ARN is byte-identical whoever (or whatever) is wielding it.
+//     Attribution here has to come from the credential's own evidence —
+//     impersonation headers above, or STS SourceIdentity on the CloudTrail
+//     side — never from the name.
+//
+// The k8s username is attacker- and operator-influenced (EKS access
+// entries let you choose it), so this fails closed: anything ARN-shaped is
+// a credential, in any partition.
 func isHumanUsername(user string) bool {
-	return user != "" && !strings.HasPrefix(user, "system:")
+	if user == "" || strings.HasPrefix(user, "system:") {
+		return false
+	}
+	return !strings.HasPrefix(user, "arn:")
 }
 
-// splitEvents accepts what audit backends emit — the log backend's JSONL
-// and the webhook backend's EventList (single- or multi-line) — by
-// decoding a stream of JSON values, which subsumes both. EventList
-// documents expand to their items. Returns each event's exact raw bytes
-// for digesting. A malformed tail stops the stream (JSON gives no
-// resync point) and is counted, not fatal.
+// splitEvents accepts every shape a Kubernetes audit log actually reaches
+// us in, by decoding a stream of JSON values and unwrapping each one:
+//
+//   - the log backend's JSONL and the webhook backend's EventList — an
+//     audit Event, or a document of them;
+//   - CloudWatch Logs envelopes, which is how EKS delivers audit logs and
+//     therefore the shape most real input has. `aws logs filter-log-events`
+//     returns {"events":[{"message":"<the audit Event, as a string>"}]},
+//     and an exported/subscribed stream is one such envelope per line.
+//     The audit Event is a JSON *string* inside, so it decodes to nothing
+//     useful unless it is unwrapped first.
+//
+// Returns each event's exact raw bytes for digesting — for a CloudWatch
+// envelope, the bytes of the embedded Event, since that is what the
+// auditID identifies and what a re-fetch would return. A malformed tail
+// stops the stream (JSON gives no resync point) and is counted, not fatal.
 func splitEvents(r io.Reader) (raws []json.RawMessage, badDocs int, err error) {
 	dec := json.NewDecoder(bufio.NewReader(r))
 	for {
@@ -323,15 +403,39 @@ func splitEvents(r io.Reader) (raws []json.RawMessage, badDocs int, err error) {
 		if err != nil {
 			return raws, badDocs + 1, nil
 		}
-		doc = bytes.TrimSpace(doc)
-		var probe struct {
-			Kind  string            `json:"kind"`
-			Items []json.RawMessage `json:"items"`
-		}
-		if json.Unmarshal(doc, &probe) == nil && probe.Kind == "EventList" {
-			raws = append(raws, probe.Items...)
-			continue
-		}
-		raws = append(raws, doc)
+		raws = append(raws, unwrap(bytes.TrimSpace(doc))...)
 	}
+}
+
+// unwrap turns one decoded document into the audit Events inside it. An
+// Event that is already an Event passes through untouched, so an ordinary
+// audit JSONL file costs one failed probe per line and nothing else.
+func unwrap(doc json.RawMessage) []json.RawMessage {
+	var probe struct {
+		Kind    string            `json:"kind"`
+		Items   []json.RawMessage `json:"items"`
+		AuditID string            `json:"auditID"`
+		// CloudWatch: a batch of log events, or a single one. The audit
+		// Event rides in Message as an escaped JSON string.
+		Events  []struct{ Message string } `json:"events"`
+		Message string                     `json:"message"`
+	}
+	if json.Unmarshal(doc, &probe) != nil {
+		return []json.RawMessage{doc} // let the event decoder count it
+	}
+	switch {
+	case probe.Kind == "EventList":
+		return probe.Items
+	case probe.AuditID != "":
+		return []json.RawMessage{doc} // a bare audit Event; never re-probe
+	case len(probe.Events) > 0:
+		out := make([]json.RawMessage, 0, len(probe.Events))
+		for _, e := range probe.Events {
+			out = append(out, json.RawMessage(strings.TrimSpace(e.Message)))
+		}
+		return out
+	case probe.Message != "":
+		return []json.RawMessage{json.RawMessage(strings.TrimSpace(probe.Message))}
+	}
+	return []json.RawMessage{doc}
 }
