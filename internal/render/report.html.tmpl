@@ -67,6 +67,15 @@
       }
       .headline em { font-style: italic; color: var(--fix); font-weight: 600; }
       .subhead { color: var(--ink-500); font-size: 14px; max-width: 62ch; }
+      /* The report's standing statement of what it does NOT claim. It sits
+         under every headline, in all three modes, on purpose: the reader
+         must never be able to take a finding — or the absence of one — for
+         a verdict on whether the action was allowed. */
+      .scope {
+        color: var(--ink-500); font-size: 13px; max-width: 68ch; margin-top: 14px;
+        padding-left: 12px; border-left: 2px solid var(--paper-200);
+      }
+      .scope em { color: var(--ink); font-style: normal; font-weight: 600; }
       .strip {
         display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px; background: var(--paper-200);
         border: 1px solid var(--paper-200); margin: 22px 0 6px;
@@ -183,14 +192,22 @@
       </p>
       {{else}}
       <h1 class="headline">
-        Every production-touching action in this window <em>traces to a named human.</em>
+        Every production-touching action in this window <em>traces to a named human</em>,
+        and every claim <em>matches the record.</em>
       </h1>
       <p class="subhead">
         Across {{.Sessions}} agent sessions, your cloud's own record binds each action to a
-        person, and each claim matches the record. That is the answer an auditor wants. Most
-        accounts can't give it.
+        person, and each agent's account of what it did is borne out. Most accounts can't
+        answer either question.
       </p>
       {{end}}
+
+      <p class="scope">
+        This report answers two questions from your cloud's own records: <em>who acted</em>,
+        and <em>did they say so</em>. It does not answer whether what they did was permitted.
+        An action can be fully attributed, faithfully claimed, and still be one you would
+        never have approved — that judgment is yours, and we do not make it for you.
+      </p>
 
       <div class="strip" style="grid-template-columns: repeat({{len .Stats}}, 1fr)">
         {{range .Stats}}

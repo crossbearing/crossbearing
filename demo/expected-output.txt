@@ -6,6 +6,7 @@ crossbearing divergence report
   records  4 in window · 4 joined (no principal filter)
 
   unattributed 1 · mismatch 0 · unclaimed-record 0 · unrecorded-claim 0 · corroborated 3
+  who acted · did they say so. not: was it allowed — that judgment is yours.
 
 ATTRIBUTION
   agent session deploy-2026-06-1… ⇄ credential session deploy-bot@2026-06-16T14:00:07Z key=ASIADEPLOYBOT0001

@@ -8,6 +8,7 @@ crossbearing divergence report
   records  4 in window · 4 joined (no principal filter)
 
   unattributed 1 · mismatch 1 · unclaimed-record 0 · unrecorded-claim 1 · corroborated 2
+  who acted · did they say so. not: was it allowed — that judgment is yours.
 
 ATTRIBUTION
   agent session arn:aws:sts::111… ≈ credential session sessA@2026-06-26T10:00:40Z key=ASIAAGENTRT00001

@@ -504,8 +504,12 @@ func (c colorizer) bold(s string) string  { return c.p("1", s) }
 func (c colorizer) blue(s string) string  { return c.p("1;38;2;11;150;214", s) } // the fix — the headline gap
 func (c colorizer) red(s string) string   { return c.p("1;38;2;181;67;46", s) }  // mismatch
 func (c colorizer) amber(s string) string { return c.p("1;38;2;181;125;30", s) } // unclaimed / unrecorded
-func (c colorizer) green(s string) string { return c.p("1;38;2;58;138;94", s) }  // corroborated — the calm ones
-func (c colorizer) dim(s string) string   { return c.p("38;2;130;144;160", s) }  // detail / why
+// green marks corroborated findings — the agent's account of an action matched
+// the record. It is an honesty verdict, NOT a safety one: a corroborated action
+// can be the worst thing in the window. Green says "this one needs no chasing
+// down", never "this one was fine".
+func (c colorizer) green(s string) string { return c.p("1;38;2;58;138;94", s) }
+func (c colorizer) dim(s string) string   { return c.p("38;2;130;144;160", s) } // detail / why
 
 // kind paints a string in the finding kind's color (no-op for unknown kinds).
 func (c colorizer) kind(k corroborate.FindingKind, s string) string {
@@ -568,6 +572,14 @@ func render(w io.Writer, rep *corroborate.Report, bindings []attribute.Binding, 
 		parts = append(parts, part)
 	}
 	fmt.Fprintf(w, "  %s\n", strings.Join(parts, " · "))
+	// The tally reads like a scorecard, and a scorecard invites a verdict the
+	// evidence cannot give. Every kind above answers "who acted, and did they
+	// say so" — none answers "should they have". A corroborated action can be
+	// the worst thing in the window, and the reader must never take the green
+	// column for a clean bill of health. Say so where the numbers are, not in
+	// a footnote nobody reaches.
+	fmt.Fprintf(w, "  %s\n",
+		c.dim("who acted · did they say so. not: was it allowed — that judgment is yours."))
 	// Delivery lag is measured against wall clock, which says nothing about
 	// when a captured file was exported — the note only makes sense live.
 	if !rc.offline && time.Since(rep.To) < 15*time.Minute {
