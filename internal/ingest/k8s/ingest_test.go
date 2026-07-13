@@ -303,3 +303,30 @@ func TestIngest_EmptyInput(t *testing.T) {
 		t.Fatalf("empty input produced %d records, %d sessions", len(res.Records), len(res.Sessions))
 	}
 }
+
+// Every kubectl invocation fires GET /api and GET /apis to discover the
+// server's types before it does anything. They act on no resource, no agent
+// claims them, and nothing can ever corroborate them — so recording them
+// leaves a standing pile of unclaimed-record findings that can never be
+// resolved and that bury the real ones. On the dev-eks corpus they were 822
+// of 1,405 events.
+func TestIngest_NonResourceRequestsAreNotActions(t *testing.T) {
+	t.Parallel()
+	nonResource := func(id, uri string) string {
+		return fmt.Sprintf(`{"kind":"Event","apiVersion":"audit.k8s.io/v1","auditID":%q,"stage":"ResponseComplete","verb":"get","requestURI":%q,"user":{"username":%q},"responseStatus":{"code":200},"stageTimestamp":%q}`,
+			id, uri, eksSSOUser, t0.Format(time.RFC3339Nano))
+	}
+	res := ingest(t, Options{}, strings.Join([]string{
+		nonResource("disc-1", "/api"),
+		nonResource("disc-2", "/apis"),
+		nonResource("disc-3", "/version"),
+		eksEvent("real-1", "patch", eksSSOUser, "ASIAVDXRLX35EVQSBZ5N", t0.Add(time.Second)),
+	}, "\n")+"\n")
+
+	if len(res.Records) != 1 {
+		t.Fatalf("records = %d, want 1 — discovery calls are the client's machinery, not the agent's actions", len(res.Records))
+	}
+	if res.Records[0].ID != "real-1" {
+		t.Errorf("ID = %q, want the one request that touched a resource", res.Records[0].ID)
+	}
+}

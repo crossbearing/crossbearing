@@ -140,15 +140,30 @@ func (e *event) accessKey() string {
 	return e.User.Extra.AccessKeyID[0]
 }
 
-// effective reports whether this event is one completed, successful
-// request — the only shape that becomes a Record. RequestReceived stages
-// duplicate ResponseComplete ones; denied/failed requests (4xx/5xx)
-// changed nothing, so corroborating them would let a denied attempt
-// "corroborate" a claim of success. A missing user.username (anonymous
-// or stripped events) yields no usable principal, so it is dropped too —
-// a Record with an empty Principal can be neither attributed nor joined.
+// effective reports whether this event is one completed, successful action
+// on a resource — the only shape that becomes a Record.
+//
+// RequestReceived stages duplicate ResponseComplete ones. Denied/failed
+// requests (4xx/5xx) changed nothing, so corroborating them would let a
+// denied attempt "corroborate" a claim of success. A missing user.username
+// (anonymous or stripped events) yields no usable principal — a Record with
+// an empty Principal can be neither attributed nor joined.
+//
+// And an event with no objectRef acted on no resource. Those are the
+// apiserver's non-resource URLs — /api and /apis discovery, /version,
+// /healthz, /openapi — which every kubectl invocation fires automatically
+// before it does anything at all. They are the client's machinery, not the
+// agent's intent: no one claims them, nothing corroborates them, and nothing
+// diverges when they happen. Recording them means every run carries a
+// standing pile of unclaimed-record findings that can never be resolved,
+// which is not a finding but a permanent false positive — and it buries the
+// real ones. On the dev-eks corpus this is 822 of 1,405 events (58%), all of
+// them GET /api and GET /apis.
 func (e *event) effective() bool {
 	if e.Stage != "ResponseComplete" || e.AuditID == "" || e.Verb == "" || e.User.Username == "" {
+		return false
+	}
+	if e.ObjectRef == nil || e.ObjectRef.Resource == "" {
 		return false
 	}
 	return e.ResponseStatus == nil || e.ResponseStatus.Code < 400
@@ -205,24 +220,20 @@ func (g *Ingester) Ingest(r io.Reader) (Result, error) {
 }
 
 func (g *Ingester) record(e *event, raw []byte) corroborate.Record {
-	op := "k8s-audit:" + e.Verb
-	var targets []string
-	if e.ObjectRef != nil && e.ObjectRef.Resource != "" {
-		op += ":" + e.ObjectRef.Resource
-		if e.ObjectRef.Subresource != "" {
-			op += "/" + e.ObjectRef.Subresource
-		}
-		target := e.ObjectRef.Resource
-		if e.ObjectRef.Namespace != "" {
-			target = e.ObjectRef.Namespace + "/" + target
-		}
-		if e.ObjectRef.Name != "" {
-			target += "/" + e.ObjectRef.Name
-		}
-		targets = append(targets, target)
-	} else if e.RequestURI != "" {
-		targets = append(targets, e.RequestURI)
+	// effective() guarantees an objectRef: a Record is an action on a
+	// resource, and nothing else reaches here.
+	op := "k8s-audit:" + e.Verb + ":" + e.ObjectRef.Resource
+	if e.ObjectRef.Subresource != "" {
+		op += "/" + e.ObjectRef.Subresource
 	}
+	target := e.ObjectRef.Resource
+	if e.ObjectRef.Namespace != "" {
+		target = e.ObjectRef.Namespace + "/" + target
+	}
+	if e.ObjectRef.Name != "" {
+		target += "/" + e.ObjectRef.Name
+	}
+	targets := []string{target}
 
 	rec := corroborate.Record{
 		ID:          e.AuditID,
