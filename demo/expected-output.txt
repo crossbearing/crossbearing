@@ -14,7 +14,7 @@ ATTRIBUTION
     window-overlap · human=UNATTRIBUTED (unattributed) · evidence: 0 item(s)
 
 UNATTRIBUTED (1)
-  record  s3:CreateBucket at 14:05:30Z by arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot
+  record  s3:CreateBucket on arn:aws:s3:::prod-customer-exports at 14:05:30Z by arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot
           event ct-2
   why     production-touching action with agent fingerprints and no named human binding
 
@@ -26,12 +26,12 @@ CORROBORATED (3)
   why     claim corroborated by aws-cloudtrail record ct-1
 
   claim   Bash(kubectl create deployment api --image=registry/api:v2 -n prod) at 14:01:00Z
-  record  k8s-audit:create:deployments at 14:01:03Z by system:serviceaccount:agents:agent-deployer
+  record  k8s-audit:create:deployments on prod/deployments/api at 14:01:03Z by system:serviceaccount:agents:agent-deployer
           event k8s-1
   why     claim corroborated by k8s-audit record k8s-1
 
   claim   Bash(git push origin main) at 14:02:00Z
-  record  github-audit:git.push at 14:02:04Z by deploy-bot
+  record  github-audit:git.push on acme/api, acme at 14:02:04Z by deploy-bot
           event gh-1
   why     claim corroborated by github-audit record gh-1
 

@@ -12,14 +12,14 @@ ATTRIBUTION
     corroborated · human=UNATTRIBUTED (unattributed) · evidence: 2 item(s)
 
 UNATTRIBUTED (1)
-  record  s3:CreateBucket at 14:04:30Z by arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot
+  record  s3:CreateBucket on arn:aws:s3:::prod-payments-backups at 14:04:30Z by arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot
           event ct-4
   why     production-touching action with agent fingerprints and no named human binding
 
 
 MISMATCH (1)
   claim   Bash(aws s3api get-bucket-policy --bucket prod-payments-exports) at 14:02:00Z
-  record  s3:PutBucketPolicy at 14:02:06Z by arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot
+  record  s3:PutBucketPolicy on arn:aws:s3:::prod-payments-exports at 14:02:06Z by arn:aws:sts::111122223333:assumed-role/agent-deployer/deploy-bot
           event ct-3
   why     claimed Bash(aws s3api get-bucket-policy --bucket prod-payments-exports) but infrastructure recorded s3:PutBucketPolicy
 

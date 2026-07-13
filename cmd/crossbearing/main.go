@@ -676,8 +676,17 @@ func renderFinding(w io.Writer, f corroborate.Finding, c colorizer) {
 		if f.Record.SourceIdentity != "" {
 			as = " as " + f.Record.SourceIdentity
 		}
-		fmt.Fprintf(w, "  %s  %s at %s by %s%s\n          %s\n",
-			c.dim("record"), f.Record.Operation, c.dim(f.Record.RecordedAt.UTC().Format(ts)),
+		// The target, not just the verb. "k8s-audit:get:secrets" says a
+		// secret was read; only the target says WHICH — and the difference
+		// between a ConfigMap-shaped secret and the Grafana admin token is
+		// the entire finding. A finding an auditor cannot act on, or
+		// falsify, is not evidence.
+		on := ""
+		if len(f.Record.Targets) > 0 {
+			on = " on " + truncate(strings.Join(f.Record.Targets, ", "), 70)
+		}
+		fmt.Fprintf(w, "  %s  %s%s at %s by %s%s\n          %s\n",
+			c.dim("record"), f.Record.Operation, on, c.dim(f.Record.RecordedAt.UTC().Format(ts)),
 			truncate(f.Record.Principal, 80), as, c.dim("event "+f.Record.ID))
 	}
 	fmt.Fprintf(w, "  %s     %s\n\n", c.dim("why"), c.dim(f.Why))

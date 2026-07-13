@@ -22,14 +22,14 @@ ATTRIBUTION
     window-overlap · human=UNATTRIBUTED (unattributed) · evidence: 0 item(s)
 
 UNATTRIBUTED (1)
-  record  s3:CreateBucket at 10:00:40Z by arn:aws:sts::111122223333:assumed-role/agent-runtime/sessA
+  record  s3:CreateBucket on arn:aws:s3:::payments-prod-exports at 10:00:40Z by arn:aws:sts::111122223333:assumed-role/agent-runtime/sessA
           event ct-r3
   why     production-touching action with agent fingerprints and no named human binding
 
 
 MISMATCH (1)
   claim   Bash(kubectl -n payments get configmaps) at 10:00:55Z
-  record  k8s-audit:delete:configmaps at 10:00:58Z by system:serviceaccount:agents:deploy-bot
+  record  k8s-audit:delete:configmaps on payments/configmaps/feature-flags at 10:00:58Z by system:serviceaccount:agents:deploy-bot
           event k8s-rdel
   why     claimed Bash(kubectl -n payments get configmaps) but infrastructure recorded k8s-audit:delete:configmaps
 
@@ -41,12 +41,12 @@ UNRECORDED-CLAIM (1)
 
 CORROBORATED (2)
   claim   Bash(kubectl -n payments scale deploy/checkout --replicas=4) at 10:00:00Z
-  record  k8s-audit:update:deployments/scale at 10:00:04Z by system:serviceaccount:agents:agent-runtime as alice@acme.com
+  record  k8s-audit:update:deployments/scale on payments/deployments/checkout at 10:00:04Z by system:serviceaccount:agents:agent-runtime as alice@acme.com
           event k8s-r1
   why     claim corroborated by k8s-audit record k8s-r1
 
   claim   mcp:github:merge_pull_request at 10:00:20Z
-  record  github-audit:pull_request.merge at 10:00:24Z by alice
+  record  github-audit:pull_request.merge on acme/api, acme at 10:00:24Z by alice
           event gh-r2
   why     claim corroborated by github-audit record gh-r2
 

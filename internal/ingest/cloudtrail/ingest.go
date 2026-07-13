@@ -126,7 +126,7 @@ func (g *Ingester) Ingest(ctx context.Context, from, to time.Time) (Result, erro
 			// success — an errored event is an attempt, not a record.
 			// (The envelope-salvage path above cannot see errorCode; a
 			// salvaged event is kept, favoring a total window.)
-			if ex.ErrorCode != "" {
+			if ex.Failed() {
 				errored++
 				continue
 			}
@@ -178,8 +178,10 @@ func (g *Ingester) IngestFile(path string) (Result, error) {
 			continue
 		}
 		// Same refusal as the live path: an errored event is an attempt,
-		// not a record of the action happening.
-		if ex.ErrorCode != "" {
+		// not a record of the action happening. Failed(), not emptiness —
+		// a service that puts an HTTP status in errorCode marks its
+		// successes "200".
+		if ex.Failed() {
 			errored++
 			continue
 		}
