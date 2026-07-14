@@ -432,3 +432,63 @@ func hasCorroboratedRecord(rep Report, recordID string) bool {
 	}
 	return false
 }
+
+// The third false-corroboration path an adversarial re-check found: consumable
+// trusted ANY non-empty SourceIdentity as "names its human → safe", never
+// checking the human was the AGENT'S. A production record naming a stranger — a
+// human running kubectl under impersonation, SourceIdentity=bob — was consumed
+// as the agent's corroborated work, and bob's finding erased. Every earlier
+// regression used SourceIdentity=="" strangers, so this branch went untested.
+func TestJoin_StrangerSourceIdentityIsNotTheAgent(t *testing.T) {
+	t.Parallel()
+	sessions := []Session{{ID: "agent", StartedAt: t0, EndedAt: t0.Add(time.Hour)}}
+	// bob deleted a production secret under impersonation; the record names bob.
+	bobDelete := Record{
+		ID: "bob-del", Operation: "k8s-audit:delete:secrets",
+		Principal: "system:serviceaccount:agents:sa", SourceIdentity: "bob@corp",
+		ProductionTouching: true, Targets: []string{"monitoring/secrets/grafana-admin"},
+		RecordedAt: t0.Add(30 * time.Second),
+	}
+
+	t.Run("phantom claim cannot corroborate a stranger's named record", func(t *testing.T) {
+		t.Parallel()
+		claims := []Claim{{ID: "phantom", SessionID: "agent",
+			Operation: "Bash(kubectl delete secret grafana-admin -n monitoring)",
+			Target:    "kubectl delete secret grafana-admin -n monitoring",
+			ClaimedAt: t0, CompletedAt: t0}}
+		rep := Join(sessions, claims, []Record{bobDelete}, MatchPolicy{Window: 20 * time.Minute, OperationMap: DeriveOperationMap(claims)})
+		if hasCorroboratedRecord(rep, "bob-del") {
+			t.Error("bob's production deletion corroborated as the agent's work")
+		}
+	})
+
+	t.Run("honest claim cannot steal a stranger's named record as a Mismatch", func(t *testing.T) {
+		t.Parallel()
+		claims := []Claim{{ID: "reader", SessionID: "agent",
+			Operation: "Bash(kubectl get pods -n monitoring)", Target: "kubectl get pods -n monitoring",
+			ClaimedAt: t0, CompletedAt: t0}}
+		rep := Join(sessions, claims, []Record{bobDelete}, MatchPolicy{Window: 20 * time.Minute, OperationMap: DeriveOperationMap(claims)})
+		for _, f := range rep.Findings {
+			if f.Kind == Mismatch && f.Record != nil && f.Record.ID == "bob-del" {
+				t.Error("bob's deletion stolen as a Mismatch against the agent")
+			}
+		}
+	})
+
+	// The agent's OWN impersonation record — SourceIdentity == the session's bound
+	// human — is the agent's, and must still corroborate.
+	t.Run("the agent's own impersonation record still corroborates", func(t *testing.T) {
+		t.Parallel()
+		bound := []Session{{ID: "agent", Human: "alice@corp", Attribution: Attribution{Method: AttrK8sImpersonation}, StartedAt: t0, EndedAt: t0.Add(time.Hour)}}
+		claims := []Claim{{ID: "c1", SessionID: "agent",
+			Operation: "Bash(kubectl delete deploy api -n prod)", Target: "kubectl delete deploy api -n prod",
+			ClaimedAt: t0, CompletedAt: t0}}
+		records := []Record{{ID: "r1", Operation: "k8s-audit:delete:deployments",
+			Principal: "system:serviceaccount:agents:sa", SourceIdentity: "alice@corp",
+			ProductionTouching: true, Targets: []string{"prod/deployments/api"}, RecordedAt: t0.Add(20 * time.Second)}}
+		rep := Join(bound, claims, records, MatchPolicy{Window: 20 * time.Minute, OperationMap: DeriveOperationMap(claims)})
+		if n := rep.Tally()[Corroborated]; n != 1 {
+			t.Errorf("the agent's own impersonation record must corroborate; corroborated=%d", n)
+		}
+	})
+}

@@ -67,11 +67,12 @@ func BashOperation(cmd string) string {
 // coincidence. Neither guarantee should have been written before it was tested.
 //
 // What actually makes over-claiming safe is the matcher's `consumable` guard: a
-// production record bound to no human is consumable only when its ownership is
-// POSITIVELY established — the record names its own human, or the operator scoped
-// the run to the credential (MatchPolicy.AgentRecord). An over-claim absent that
-// evidence falls to UnrecordedClaim, not Corroborated — the direction this engine
-// is allowed to be wrong in.
+// production record is consumable only when its ownership is POSITIVELY
+// established — the record names THE AGENT SESSION'S OWN human (not merely some
+// human: a stranger's impersonation record names one too), or the operator
+// scoped the run to the credential (MatchPolicy.AgentRecord). An over-claim
+// absent that evidence falls to UnrecordedClaim, not Corroborated — the
+// direction this engine is allowed to be wrong in.
 //
 // Heredoc bodies and command substitutions are excluded upstream (stripHeredocs,
 // hasUnresolved): those are not over-claims but claims about text that was never

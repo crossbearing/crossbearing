@@ -124,26 +124,29 @@ func Join(sessions []Session, claims []Claim, records []Record, p MatchPolicy) R
 	// way every other judgment does: as INPUT (MatchPolicy.AgentRecord, wired from
 	// the operator's --principal scope), never as a guess the engine makes.
 	//
-	// So a protected record is consumable only when the agent's ownership is
-	// POSITIVELY established: the record names its own human (SourceIdentity), or
-	// the operator scoped this run to the credential. Absent that, the record is
-	// left for pass 2, where it becomes Unattributed, and its would-be claim
-	// becomes UnrecordedClaim. Both over-report, and over-reporting is the
-	// direction this engine is allowed to be wrong in: an unattributed finding can
-	// be argued down with evidence; a vanished one cannot be argued with at all.
+	// So a production record is consumable only when the agent's ownership is
+	// POSITIVELY established: the record names ITS OWN HUMAN and that human is the
+	// one this session is bound to, or the operator scoped this run to the
+	// credential. Absent that, the record is left for pass 2, where it becomes
+	// Unattributed, and its would-be claim becomes UnrecordedClaim. Both
+	// over-report, and over-reporting is the direction this engine is allowed to
+	// be wrong in: an unattributed finding can be argued down with evidence; a
+	// vanished one cannot be argued with at all.
 	//
-	// consumable is NOT keyed on the session's human. A --operator-declared human
-	// (the weakest, self-reported binding) binds the AGENT's session; it says
-	// nothing about who produced an arbitrary in-window record, and letting it
-	// de-escalate a stranger's record here was a false-corroboration path of its
-	// own.
-	consumable := func(r Record) bool {
-		if !r.ProductionTouching || r.SourceIdentity != "" {
-			return true // its loss hides nothing: not production, or it names its human
-		}
-		return p.AgentRecord != nil && p.AgentRecord(r) // else: proved the agent's, or refused
-	}
-
+	// "names its human" is not enough on its own — it must name THE SAME human the
+	// agent session is bound to. A production record carrying SourceIdentity=bob,
+	// from a human running kubectl under impersonation, names a human; it is still
+	// bob's action, not the agent's, and letting the agent's claim consume it
+	// reports bob's deletion as the agent's corroborated work and erases bob's
+	// finding. So the SourceIdentity must equal the session's human. When the
+	// session is unbound (human ""), no SourceIdentity-bearing record matches,
+	// which is correct: an unbound agent has proved ownership of nothing.
+	//
+	// Non-production records are the low-stakes axis and stay freely matchable:
+	// requiring identity proof for every read would make the join useless on the
+	// unattributed-by-default accounts that are the product's whole premise (real
+	// CloudTrail carries no SourceIdentity), and a mis-paired read cannot erase a
+	// production divergence.
 	matches := make(map[string]*Record, len(claims))
 	for _, s := range sessions {
 		sc := bySession[s.ID]
@@ -158,6 +161,17 @@ func Join(sessions []Session, claims []Claim, records []Record, p MatchPolicy) R
 		sort.SliceStable(sc, func(i, j int) bool { return sc[i].ClaimedAt.Before(sc[j].ClaimedAt) })
 		bySession[s.ID] = sc
 
+		sessionHuman := humanBySession[s.ID]
+		consumable := func(r Record) bool {
+			if !r.ProductionTouching {
+				return true // low-stakes axis: a mis-paired read erases no divergence
+			}
+			if r.SourceIdentity != "" {
+				return r.SourceIdentity == sessionHuman // the agent's own human, not a stranger's
+			}
+			return p.AgentRecord != nil && p.AgentRecord(r) // unattributed production: operator scope
+		}
+
 		// Phase 1 — agreeing matches. AGREEMENT ONLY: a claim must not take an
 		// unrelated record just because its own is still out of reach, or it
 		// would manufacture a Mismatch another claim would have corroborated.
@@ -171,7 +185,9 @@ func Join(sessions []Session, claims []Claim, records []Record, p MatchPolicy) R
 		// Phase 2 — a claim with no agreeing record may still correlate with a
 		// disagreeing one: that is a Mismatch, a real finding (claimed a read,
 		// performed a write). It runs LAST so no claim manufactures a Mismatch
-		// out of a record another claim would have corroborated.
+		// out of a record another claim would have corroborated. Same consumable
+		// guard, so a stranger's production record cannot be stolen as a Mismatch
+		// either.
 		for i := range sc {
 			if matches[sc[i].ID] != nil {
 				continue
