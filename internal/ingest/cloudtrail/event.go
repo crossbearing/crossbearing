@@ -162,6 +162,51 @@ func (e *Extracted) Failed() bool {
 	return true // a non-numeric code is an AWS error string: AccessDenied, ...
 }
 
+// resourceParamKeys are the requestParameters fields that name a resource across
+// the AWS services whose mutations most need production classification. The list
+// is curated, not exhaustive — a miss under-escalates (safe: the record still
+// surfaces as UnclaimedRecord), never over-consumes — and grows from observed
+// logs, the same empirical way the CLI translators do.
+var resourceParamKeys = []string{
+	"bucketName", "key",
+	"functionName",
+	"roleName", "userName", "groupName", "policyName", "policyArn",
+	"tableName",
+	"secretId",
+	"keyId",
+	"topicArn", "queueUrl", "queueName",
+	"streamName",
+	"dBInstanceIdentifier", "dBClusterIdentifier",
+	"clusterName", "clusterArn",
+	"repositoryName",
+	"stackName", "stackId",
+	"logGroupName",
+	"parameterName",
+}
+
+// requestParamTargets pulls resource identifiers out of a raw requestParameters
+// object. Only top-level string values under known keys are taken; anything else
+// (nested shapes, numbers, arrays) is ignored, so an odd event contributes no
+// target rather than a wrong one.
+func requestParamTargets(raw json.RawMessage) []string {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil {
+		return nil
+	}
+	var targets []string
+	for _, k := range resourceParamKeys {
+		v, ok := m[k]
+		if !ok {
+			continue
+		}
+		var str string
+		if json.Unmarshal(v, &str) == nil && str != "" {
+			targets = append(targets, str)
+		}
+	}
+	return targets
+}
+
 // SessionName returns the role session name embedded in an assumed-role
 // principal ARN, or "" when the principal is not an assumed-role session.
 func (e *Extracted) SessionName() string {
@@ -247,6 +292,18 @@ func ExtractRaw(raw []byte) (Extracted, error) {
 		if r.ARN != "" {
 			out.Targets = append(out.Targets, r.ARN)
 		}
+	}
+	// CloudTrail does not attach a resources[] array to every management event —
+	// notably S3 bucket-level mutations (DeleteBucket, PutBucketPolicy,
+	// CreateBucket) carry the bucket only in requestParameters. Left unread, such
+	// an event arrives with no target, so --production-match cannot flag it and it
+	// under-escalates to UnclaimedRecord instead of Unattributed, dropping a real
+	// production action below the report's headline count. When resources[] gave
+	// nothing, pull the well-known resource-identifier fields out of
+	// requestParameters so the target set — and the production classification that
+	// rides on it — is not blind to the operations most worth escalating.
+	if len(out.Targets) == 0 && len(ev.RequestParameters) > 0 {
+		out.Targets = requestParamTargets(ev.RequestParameters)
 	}
 
 	if out.IsAssumeRole() {

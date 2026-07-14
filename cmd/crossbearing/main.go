@@ -279,12 +279,10 @@ func runReportPipeline(ctx context.Context, client *aws.Client, p reportParams, 
 		recordSide.Sessions = append(recordSide.Sessions, az.Sessions...)
 	}
 
-	// Scope the join. Records: only the principal the agent's credentials
-	// acted as (session→principal correlation is internal/attribute's job;
-	// until then the operator names it). Claims: only those whose derived
-	// vocabulary can produce CloudTrail records at all — a Write to a local
-	// file is not corroborable by this record stream, so its absence there
-	// is not a divergence.
+	// Claims are scoped (below) to those whose derived vocabulary can produce a
+	// record at all — a Write to a local file is not corroborable by any record
+	// stream, so its absence is not a divergence.
+	//
 	// Every in-window record enters the join. --principal AUTHORIZES corroborating
 	// the agent's own production actions (below); it does NOT filter records out.
 	// Filtering by the agent's principal would delete the very records a pivot is

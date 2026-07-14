@@ -41,9 +41,11 @@ type MatchPolicy struct {
 	// pretend to — the record falls to Unattributed instead.
 	AgentRecord func(Record) bool
 
-	// Now supplies the current time for sessions still believed live. Injected
-	// so a report over the same inputs is byte-identical run to run; the
-	// evidence package is signed over these findings.
+	// Now supplies the current time for a session still believed live (zero
+	// EndedAt). It is a test seam: every shipped ingester sets a concrete
+	// EndedAt, so the CLI path never reads it and its reports are byte-identical
+	// run to run for that reason. A caller that synthesizes live sessions should
+	// inject a fixed clock here to keep the signed evidence deterministic.
 	Now func() time.Time
 }
 
@@ -142,11 +144,15 @@ func Join(sessions []Session, claims []Claim, records []Record, p MatchPolicy) R
 	// session is unbound (human ""), no SourceIdentity-bearing record matches,
 	// which is correct: an unbound agent has proved ownership of nothing.
 	//
-	// Non-production records are the low-stakes axis and stay freely matchable:
-	// requiring identity proof for every read would make the join useless on the
-	// unattributed-by-default accounts that are the product's whole premise (real
-	// CloudTrail carries no SourceIdentity), and a mis-paired read cannot erase a
-	// production divergence.
+	// READS are the low-stakes axis and stay freely matchable (see the per-session
+	// `consumable` below): requiring identity proof for every read would make the
+	// join useless on the unattributed-by-default accounts that are the product's
+	// whole premise — real CloudTrail carries no SourceIdentity — and a mis-paired
+	// read cannot erase a divergence, because a read changed nothing. A WRITE is
+	// not free: it must prove ownership, whether or not its production target was
+	// identified. Keying that on ReadOnly, not ProductionTouching, is the whole
+	// point — ProductionTouching is a best-effort flag that misses writes whose
+	// resource CloudTrail reports only in requestParameters.
 	matches := make(map[string]*Record, len(claims))
 	for _, s := range sessions {
 		sc := bySession[s.ID]

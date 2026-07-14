@@ -277,3 +277,45 @@ func TestExtract_FederatedPrincipalHasNoARN(t *testing.T) {
 		t.Errorf("a federated identity must not produce a session binding: session=%q sourceIdentity=%q", ex.SessionName(), ex.SourceIdentity)
 	}
 }
+
+// CloudTrail attaches no resources[] to S3 bucket-level mutations — the bucket
+// lives in requestParameters. Left unread, a production DeleteBucket arrives with
+// no target, so --production-match cannot flag it and it under-escalates to
+// UnclaimedRecord instead of the Unattributed headline. The ingester now falls
+// back to requestParameters for the well-known resource fields.
+func TestExtract_TargetsFromRequestParameters(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, raw, wantTarget string
+	}{
+		{"s3 bucket delete", `{"eventID":"e","eventTime":"2026-07-13T05:00:00Z","eventSource":"s3.amazonaws.com","eventName":"DeleteBucket","userIdentity":{"arn":"arn:aws:iam::1:user/x"},"requestParameters":{"bucketName":"prod-payments"}}`, "prod-payments"},
+		{"lambda function", `{"eventID":"e","eventTime":"2026-07-13T05:00:00Z","eventSource":"lambda.amazonaws.com","eventName":"DeleteFunction20150331","userIdentity":{"arn":"arn:aws:iam::1:user/x"},"requestParameters":{"functionName":"prod-processor"}}`, "prod-processor"},
+		{"iam role", `{"eventID":"e","eventTime":"2026-07-13T05:00:00Z","eventSource":"iam.amazonaws.com","eventName":"DeleteRole","userIdentity":{"arn":"arn:aws:iam::1:user/x"},"requestParameters":{"roleName":"prod-admin"}}`, "prod-admin"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ex, err := ExtractRaw([]byte(tt.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(ex.Targets) != 1 || ex.Targets[0] != tt.wantTarget {
+				t.Errorf("Targets = %v, want [%s]", ex.Targets, tt.wantTarget)
+			}
+		})
+	}
+}
+
+// resources[] wins when present — requestParameters is only the fallback, so an
+// event that already names its resource ARN is not double-targeted.
+func TestExtract_ResourcesWinOverRequestParameters(t *testing.T) {
+	t.Parallel()
+	const raw = `{"eventID":"e","eventTime":"2026-07-13T05:00:00Z","eventSource":"s3.amazonaws.com","eventName":"PutBucketPolicy","userIdentity":{"arn":"arn:aws:iam::1:user/x"},"resources":[{"ARN":"arn:aws:s3:::prod-x"}],"requestParameters":{"bucketName":"prod-x"}}`
+	ex, err := ExtractRaw([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ex.Targets) != 1 || ex.Targets[0] != "arn:aws:s3:::prod-x" {
+		t.Errorf("Targets = %v, want just the resources[] ARN", ex.Targets)
+	}
+}
