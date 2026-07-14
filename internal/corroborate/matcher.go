@@ -67,7 +67,15 @@ func Join(sessions []Session, claims []Claim, records []Record, p MatchPolicy) R
 	// Pass 1: every claim seeks its record.
 	for _, s := range sessions {
 		sc := bySession[s.ID]
-		sort.Slice(sc, func(i, j int) bool { return sc[i].ClaimedAt.Before(sc[j].ClaimedAt) })
+		// STABLE. Every claim split out of one shell script carries that tool
+		// call's ClaimedAt, so a script's commands are all equal keys here —
+		// and their input order IS their execution order. An unstable sort
+		// permutes them, and because bestRecord greedily consumes records, a
+		// later command's claim can then be credited with an earlier one's
+		// record. The counts stay right and the evidence is quietly wrong,
+		// which is the failure this engine cannot afford: that claim→record
+		// pairing is what the hash chain signs.
+		sort.SliceStable(sc, func(i, j int) bool { return sc[i].ClaimedAt.Before(sc[j].ClaimedAt) })
 		for i := range sc {
 			c := sc[i]
 			rec, ok := bestRecord(c, records, usedRecords, p)
@@ -134,7 +142,7 @@ func bestRecord(c Claim, records []Record, used map[string]bool, p MatchPolicy) 
 		if used[r.ID] {
 			continue
 		}
-		gap := absDuration(r.RecordedAt.Sub(c.ClaimedAt))
+		gap := claimGap(c, r.RecordedAt)
 		if gap > p.Window {
 			continue
 		}
@@ -172,6 +180,33 @@ func sessionForRecord(r Record, windows map[string][2]time.Time) (string, bool) 
 		}
 	}
 	return "", false
+}
+
+// claimGap measures how far a record falls OUTSIDE the span in which the claim
+// could have executed. A tool call that ran for four minutes could have produced
+// its record at any moment inside those four minutes, so a record landing within
+// the span is a zero gap, and only distance beyond either end counts against the
+// match window.
+//
+// Measuring from ClaimedAt alone treats a script as an instant. Agent scripts
+// sleep and wait, and every command split out of one inherits the call's start
+// time — so on a long script the later commands drift out of the window and the
+// join invents an UnrecordedClaim and an UnclaimedRecord for work that plainly
+// corroborates. Streams that report no completion time (CompletedAt zero)
+// degrade to the point behaviour exactly as before.
+func claimGap(c Claim, at time.Time) time.Duration {
+	end := c.CompletedAt
+	if end.Before(c.ClaimedAt) { // zero, or a stream with clocks out of order
+		end = c.ClaimedAt
+	}
+	switch {
+	case at.Before(c.ClaimedAt):
+		return c.ClaimedAt.Sub(at)
+	case at.After(end):
+		return at.Sub(end)
+	default:
+		return 0 // inside the window the tool call was running
+	}
 }
 
 func absDuration(d time.Duration) time.Duration {

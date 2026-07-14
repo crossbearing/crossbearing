@@ -223,9 +223,16 @@ func TestFailed(t *testing.T) {
 		{"HTTP 200 in errorCode is a SUCCESS (Amazon Managed Grafana)", "200", false},
 		{"HTTP 201 created", "201", false},
 		{"HTTP 204 no content", "204", false},
-		{"HTTP 500 genuinely failed", "500", true},
+		// The rule is the one k8s and gcp already use: refuse what NAMES a
+		// failure, not everything outside 2xx. Refusing a real record is the
+		// worst mistake available here — the report then affirmatively denies a
+		// divergence that happened.
+		{"gRPC 0 is OK, not a failure", "0", false},
+		{"HTTP 304 is a successful conditional read", "304", false},
+		{"HTTP 302 redirect is not a failure", "302", false},
+		{"HTTP 400 genuinely failed", "400", true},
 		{"HTTP 403 genuinely failed", "403", true},
-		{"HTTP 302 is not success", "302", true},
+		{"HTTP 500 genuinely failed", "500", true},
 		{"AWS error strings stay errors", "AccessDenied", true},
 		{"throttling is an attempt, not an action", "ThrottlingException", true},
 	}

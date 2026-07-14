@@ -68,8 +68,11 @@ func DeriveOperationMap(claims []Claim) map[string][]string {
 			continue
 		}
 		key := ClaimKey(c)
-		for _, translate := range cliTranslators {
-			for _, op := range translate(c.Target) {
+		// One lex per claim: segmentOps translates the tokens directly, where
+		// running the five RecordOps entry points would lex the same command
+		// five times over.
+		for _, seg := range shellCommands(c.Target) {
+			for _, op := range segmentOps(seg) {
 				if !contains(m[key], op) {
 					m[key] = append(m[key], op)
 				}

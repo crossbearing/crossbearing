@@ -47,38 +47,59 @@ func shellCommands(cmd string) [][]string {
 }
 
 // stripRedirections drops I/O redirection from a segment: it plumbs the
-// command's output and says nothing about what the command did. Leaving it
-// in would put `2>` and a filename among the command's arguments, where a
-// filename can be misread as a resource name and every reconstructed
-// command line trails a fragment of shell syntax.
+// command's output and says nothing about what the command did. Left in, `2>`
+// and a filename ride along as arguments, where a filename can be misread as a
+// resource name and every reconstructed command line trails shell syntax.
+//
+// It strips ONLY a token that is redirection and nothing else — `>`, `>>`, `<`,
+// `2>`, `&>`, `2>&1`. The lexer has already removed the quotes that made a token
+// an argument, so `--field-selector '<expr>'` arrives here as the bare token
+// `<expr>`, indistinguishable by prefix from a redirect. An earlier version
+// matched on the leading characters and deleted it — silently dropping a real
+// argument from the command, and therefore from the claim's Target, which is
+// what the report shows and what every translator re-reads. A claim must never
+// describe a command the agent did not run.
+//
+// The cost of the narrower rule is that an attached form (`>out.txt`, no space)
+// survives as a stray token. That is the safe direction: a spurious token makes
+// a translation fail closed, where a missing argument makes it silently wrong.
 func stripRedirections(seg []string) []string {
 	out := make([]string, 0, len(seg))
 	for i := 0; i < len(seg); i++ {
 		t := seg[i]
-		if !isRedirect(t) {
+		if !isRedirectOperator(t) {
 			out = append(out, t)
 			continue
 		}
-		// `> file` and `2> file` take the next token as their target;
-		// `2>&1` and `>file` carry it already.
-		if t[len(t)-1] == '>' || t[len(t)-1] == '<' {
+		// An operator ending in `>` or `<` still wants its target: `> file`.
+		// `2>&1` already names its destination and takes no next token.
+		if c := t[len(t)-1]; c == '>' || c == '<' {
 			i++
 		}
 	}
 	return out
 }
 
-// isRedirect reports whether a token is a redirection operator, with or
-// without an attached target: > >> < 2> &> 2>&1 >file.
-func isRedirect(t string) bool {
-	i := 0
-	for i < len(t) && t[i] >= '0' && t[i] <= '9' { // an optional fd number
-		i++
+// isRedirectOperator reports whether a token is redirection syntax and NOTHING
+// else: only digits, `&`, `-`, `<` and `>`, with at least one `<` or `>`. A
+// token carrying any other character is an argument that merely begins like a
+// redirect, and is left alone.
+func isRedirectOperator(t string) bool {
+	if t == "" {
+		return false
 	}
-	if i < len(t) && t[i] == '&' && i == 0 { // &> and &>>
-		i++
+	arrow := false
+	for i := 0; i < len(t); i++ {
+		switch c := t[i]; {
+		case c == '<' || c == '>':
+			arrow = true
+		case (c >= '0' && c <= '9') || c == '&' || c == '-':
+			// an fd number, a &-dup, or the &- close form
+		default:
+			return false
+		}
 	}
-	return i < len(t) && (t[i] == '>' || t[i] == '<')
+	return arrow
 }
 
 // CLIInvocations returns the individual CLI commands a shell command runs
@@ -114,18 +135,41 @@ func isRedirect(t string) bool {
 func CLIInvocations(command string) []string {
 	var out []string
 	for _, seg := range shellCommands(command) {
-		if len(seg) == 0 {
-			continue
-		}
-		line := joinTokens(seg)
-		for _, translate := range cliTranslators {
-			if len(translate(line)) > 0 {
-				out = append(out, line)
-				break
-			}
+		if len(segmentOps(seg)) > 0 {
+			out = append(out, joinTokens(seg))
 		}
 	}
 	return out
+}
+
+// segmentOps translates ONE already-lexed command segment into the record
+// operations it would produce, across every CLI the engine ingests.
+//
+// The per-CLI RecordOps entry points each lex the whole command themselves,
+// which is right for their own contract but ruinous when a caller wants all of
+// them: running the five translators over a command lexed the command five
+// times, and CLIInvocations then re-lexed each reconstructed segment five times
+// more. Working from tokens collapses that to one lex per command.
+func segmentOps(seg []string) []string {
+	if len(seg) == 0 {
+		return nil
+	}
+	var ops []string
+	if op, ok := awsInvocation(seg); ok {
+		ops = append(ops, op)
+	}
+	ops = append(ops, kubectlInvocation(seg)...)
+	if op, ok := ghInvocation(seg); ok {
+		ops = append(ops, op)
+	}
+	if gitPushInvocation(seg) {
+		ops = append(ops, "github-audit:git.push")
+	}
+	ops = append(ops, gcloudInvocation(seg)...)
+	if op, ok := azInvocation(seg); ok {
+		ops = append(ops, op)
+	}
+	return ops
 }
 
 // joinTokens rebuilds a runnable command line from resolved tokens, quoting

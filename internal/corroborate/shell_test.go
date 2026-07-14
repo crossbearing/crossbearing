@@ -199,3 +199,80 @@ func TestShellCommands_EveryCLI(t *testing.T) {
 		})
 	}
 }
+
+// The lexer strips the quotes that made a token an argument, so an argument
+// beginning with `<` arrives indistinguishable from a redirect. Deleting it
+// would silently drop it from the command — and therefore from the claim's
+// Target, which is what the report shows and what every translator re-reads.
+// A claim must never describe a command the agent did not run.
+func TestStripRedirections_KeepsArgumentsThatLookLikeRedirects(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		command string
+		want    []string
+	}{
+		{
+			name:    "redirects are plumbing and are dropped",
+			command: "kubectl get pods -n prod > /tmp/out.txt 2>&1",
+			want:    []string{"kubectl get pods -n prod"},
+		},
+		{
+			name:    "an argument that merely begins like a redirect survives",
+			command: "kubectl get pods -n prod --field-selector '<expr>'",
+			want:    []string{"kubectl get pods -n prod --field-selector '<expr>'"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := CLIInvocations(tt.command); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("CLIInvocations() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+// ExpandShellClaim is shared by BOTH claim streams on purpose. An agent that
+// runs a forty-command script has the same 1:N bug on whichever stream observes
+// it, and bedrock exists precisely for the agents that emit no transcript.
+func TestExpandShellClaim(t *testing.T) {
+	t.Parallel()
+	script := "export PATH=/opt/bin\nK=kubectl\necho go\n" +
+		"$K -n monitoring rollout restart ds/alloy 2>&1\n" +
+		"$K -n opencost rollout restart deploy/opencost"
+	c := Claim{
+		ID: "toolu_01A", Operation: "Bash(export PATH=/opt/bin)", Target: script,
+		Raw: Provenance{Locator: "loc#toolu_01A", Digest: "abc"},
+	}
+
+	out := ExpandShellClaim(c)
+	if len(out) != 2 {
+		t.Fatalf("claims = %d, want 2 (one per kubectl invocation): %+v", len(out), out)
+	}
+	for i, want := range []string{
+		"kubectl -n monitoring rollout restart ds/alloy",
+		"kubectl -n opencost rollout restart deploy/opencost",
+	} {
+		if out[i].Target != want {
+			t.Errorf("claim[%d].Target = %q, want %q", i, out[i].Target, want)
+		}
+		// Every split Target must re-parse, or the join loses all of them.
+		if len(KubectlRecordOps(out[i].Target)) == 0 {
+			t.Errorf("claim[%d].Target %q translates to nothing", i, out[i].Target)
+		}
+	}
+	if out[0].ID == out[1].ID {
+		t.Errorf("split claims share ID %q — the matcher consumes one record per claim", out[0].ID)
+	}
+	if out[0].Raw != c.Raw || out[1].Raw != c.Raw {
+		t.Error("split claims must keep the tool call's provenance: both commands are written on that one line")
+	}
+
+	// A command with no recognized invocation is still a claim — it may have
+	// done something real; we simply cannot corroborate it.
+	solo := Claim{ID: "t", Operation: "Bash(terraform apply)", Target: "terraform apply -auto-approve"}
+	if got := ExpandShellClaim(solo); len(got) != 1 || got[0].ID != "t" {
+		t.Errorf("unrecognized command = %+v, want the single unsuffixed claim", got)
+	}
+}

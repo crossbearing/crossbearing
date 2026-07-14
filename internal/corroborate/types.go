@@ -102,8 +102,21 @@ type Claim struct {
 	// matcher's job, not the ingester's.
 	Operation string
 	// Target is the claimed object of the action (file path, repo, ARN, URL).
-	Target    string
+	Target string
+	// ClaimedAt is when the claim's tool call STARTED.
 	ClaimedAt time.Time
+	// CompletedAt is when it returned — the moment the agent's own stream
+	// proved it executed. Zero when the stream doesn't say.
+	//
+	// A shell claim is not an instant. Agent scripts sleep, poll, and wait on
+	// rollouts (the dev-eks corpus has `sleep 90` and `rollout status
+	// --timeout=150s` inside single tool calls), and every command split out of
+	// one script inherits that call's ClaimedAt. Matched as a point, a long
+	// script's later commands fall outside the window and become UnrecordedClaim
+	// while their records become UnclaimedRecord — both false, and the exact
+	// pair the engine exists to avoid inventing. The action happened somewhere
+	// in [ClaimedAt, CompletedAt]; the matcher correlates against that span.
+	CompletedAt time.Time
 	// Raw preserves provenance: where exactly this claim can be re-read.
 	Raw Provenance
 }

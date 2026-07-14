@@ -20,6 +20,8 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"github.com/crossbearing/crossbearing/internal/corroborate"
 )
 
 // entry is the slice of a transcript JSONL line this package reads.
@@ -94,23 +96,10 @@ func operationAndTarget(b contentBlock) (op, target string) {
 	case b.Name == "Bash":
 		cmd, _ := input["command"].(string)
 		target = cmd
-		return "Bash(" + truncateCommand(cmd) + ")", target
+		return "Bash(" + corroborate.BashOperation(cmd) + ")", target
 	case strings.HasPrefix(b.Name, "mcp__"):
 		return "mcp:" + strings.ReplaceAll(strings.TrimPrefix(b.Name, "mcp__"), "__", ":"), target
 	default:
 		return b.Name, target
 	}
-}
-
-// truncateCommand keeps the operation readable in reports: first line
-// only, capped — the full command stays in Claim.Target.
-func truncateCommand(cmd string) string {
-	if i := strings.IndexByte(cmd, '\n'); i >= 0 {
-		cmd = cmd[:i]
-	}
-	const max = 100
-	if len(cmd) > max {
-		return cmd[:max] + "…"
-	}
-	return cmd
 }

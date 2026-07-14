@@ -114,8 +114,12 @@ func (g *Ingester) Ingest(r io.Reader, locator string) (Result, error) {
 	}
 
 	var (
-		pending  = make(map[string]pendingClaim) // tool_use ID → claim
-		executed = make(map[string]bool)         // tool_use IDs with results
+		pending = make(map[string]pendingClaim) // tool_use ID → claim
+		// tool_use ID → when its toolResult landed. That timestamp is the far end
+		// of the span in which the command could have run: a shell tool that sleeps
+		// and waits on a rollout is not an instant, and every command split out of
+		// it inherits the call's start time.
+		executed = make(map[string]time.Time)    // tool_use ID → result time
 		windows  = make(map[string][2]time.Time) // sessionID → [first, last]
 		order    int
 		skipped  int
@@ -149,7 +153,9 @@ func (g *Ingester) Ingest(r io.Reader, locator string) (Result, error) {
 
 		uses, results := l.toolActivity()
 		for _, id := range results {
-			executed[id] = true
+			if _, seen := executed[id]; !seen {
+				executed[id] = l.Timestamp
+			}
 		}
 		digest := "" // one digest per record, shared by its claims
 		for _, tc := range uses {
@@ -191,13 +197,20 @@ func (g *Ingester) Ingest(r io.Reader, locator string) (Result, error) {
 	var res Result
 	claims := make([]pendingClaim, 0, len(pending))
 	for id, pc := range pending {
-		if executed[id] {
-			claims = append(claims, pc)
+		at, ok := executed[id]
+		if !ok {
+			continue // no toolResult: the call never ran, so it claims nothing
 		}
+		pc.claim.CompletedAt = at
+		claims = append(claims, pc)
 	}
 	sort.Slice(claims, func(i, j int) bool { return claims[i].order < claims[j].order })
 	for _, pc := range claims {
-		res.Claims = append(res.Claims, pc.claim)
+		// A shell tool that runs a script claims each of its commands, exactly as
+		// a Claude Code Bash call does. This stream exists for kagent-style agents
+		// that emit no transcript — which is the Kubernetes path, which is where
+		// the scripts are — so it needs the split at least as much as the other.
+		res.Claims = append(res.Claims, corroborate.ExpandShellClaim(pc.claim)...)
 	}
 
 	res.Sessions = g.sessions(windows, locator)

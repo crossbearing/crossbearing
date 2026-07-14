@@ -150,7 +150,14 @@ func (e *Extracted) Failed() bool {
 		return false
 	}
 	if n, err := strconv.Atoi(e.ErrorCode); err == nil {
-		return n < 200 || n > 299
+		// A numeric code is a foreign API's status, and the rule is the one the
+		// other ingesters already use: k8s refuses code >= 400, gcp refuses a
+		// non-zero gRPC status. Refuse what NAMES a failure, rather than
+		// everything outside 2xx — "0" is gRPC's OK, and a 304 is a successful
+		// conditional read. Dropping either would be the very mistake this
+		// function exists to undo: a real record discarded at ingestion is a
+		// divergence the report then affirmatively denies.
+		return n >= 400
 	}
 	return true // a non-numeric code is an AWS error string: AccessDenied, ...
 }
