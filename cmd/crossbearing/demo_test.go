@@ -19,6 +19,8 @@ func fabParams(format string) reportParams {
 		cloudtrailFile:  "../../demo/fab/aws-cloudtrail.json",
 		githubAudit:     "../../demo/fab/github-audit.jsonl",
 		githubOrg:       "acme",
+		operator:        "alice@acme.com",
+		principal:       "agent-runtime,alice",
 		productionMatch: "prod",
 		format:          format,
 		preparedFor:     "Northwind AI",
@@ -46,6 +48,7 @@ func TestDemo_DeterministicOutput(t *testing.T) {
 		k8sCluster:      "prod-east",
 		githubAudit:     "../../demo/github-audit.jsonl",
 		githubOrg:       "acme",
+		principal:       "deploy-bot,agent-deployer",
 		productionMatch: "prod-",
 		tagKeys:         "operator,human,owner",
 		pad:             30 * time.Minute,
@@ -77,6 +80,7 @@ func TestAWSDemo_DeterministicOutput(t *testing.T) {
 	err = runReportPipeline(context.Background(), nil, reportParams{
 		transcript:      "../../demo/aws/transcript.jsonl",
 		cloudtrailFile:  "../../demo/aws/aws-cloudtrail.json",
+		principal:       "deploy-bot",
 		productionMatch: "prod-",
 		tagKeys:         "operator,human,owner",
 		pad:             30 * time.Minute,
@@ -125,11 +129,13 @@ func TestFabDemo_HTML(t *testing.T) {
 	html := out.String()
 	for _, want := range []string{
 		"<html", "</html>",
-		"Northwind AI",                 // --prepared-for on the cover
-		"Of 2 agent sessions",          // headline driven by the real join
-		"1 production-touching action", // the unattributed escalation
-		"s3:CreateBucket",
-		"payments-prod-exports",
+		"Northwind AI", // --prepared-for on the cover
+		// Scoped with --operator/--principal (the operator asserting alice runs
+		// this agent), so every recorded action attributes and the report is in
+		// its divergent mode — the honest headline once ownership is asserted.
+		"traces to a named human",
+		"diverge from the record",
+		"s3:CreateBucket",             // the unclaimed record
 		"k8s-audit:delete:configmaps", // the mismatch record side
 		"dynamodb delete-table",       // the unrecorded claim
 		"Bedrock invocation log",      // streams line
@@ -138,7 +144,7 @@ func TestFabDemo_HTML(t *testing.T) {
 			t.Errorf("fab html missing %q", want)
 		}
 	}
-	if n := strings.Count(html, `class="finding sheet"`); n != 3 { // 1 unattributed + 2 divergences
+	if n := strings.Count(html, `class="finding sheet"`); n != 3 { // 3 divergences
 		t.Errorf("finding cards = %d, want 3", n)
 	}
 }

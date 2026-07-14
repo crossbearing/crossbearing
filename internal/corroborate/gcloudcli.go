@@ -16,7 +16,7 @@ import "strings"
 // entries here are the ones whose methodNames are stable and verified.
 func GcloudRecordOps(command string) []string {
 	var ops []string
-	for _, seg := range shellSegments(command) {
+	for _, seg := range shellCommands(command) {
 		ops = append(ops, gcloudInvocation(seg)...)
 	}
 	return ops
@@ -41,7 +41,7 @@ func gcloudInvocation(tokens []string) []string {
 	for i < len(tokens) && (isEnvAssign(tokens[i]) || commandWrappers[tokens[i]]) {
 		i++
 	}
-	if i >= len(tokens) || tokens[i] != "gcloud" {
+	if i >= len(tokens) || !isCommand(tokens[i], "gcloud") {
 		return nil
 	}
 	i++

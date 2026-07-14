@@ -15,4 +15,5 @@ cd "$(dirname "$0")/../.."
 go run ./cmd/crossbearing report \
   --transcript        demo/aws/transcript.jsonl \
   --aws-cloudtrail    demo/aws/aws-cloudtrail.json \
+  --principal         deploy-bot \
   --production-match  prod-

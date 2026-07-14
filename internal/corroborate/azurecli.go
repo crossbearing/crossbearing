@@ -13,7 +13,7 @@ import "strings"
 // translators.
 func AzRecordOps(command string) []string {
 	var ops []string
-	for _, seg := range shellSegments(command) {
+	for _, seg := range shellCommands(command) {
 		if op, ok := azInvocation(seg); ok {
 			ops = append(ops, op)
 		}
@@ -54,7 +54,7 @@ func azInvocation(tokens []string) (string, bool) {
 	for i < len(tokens) && (isEnvAssign(tokens[i]) || commandWrappers[tokens[i]]) {
 		i++
 	}
-	if i >= len(tokens) || tokens[i] != "az" {
+	if i >= len(tokens) || !isCommand(tokens[i], "az") {
 		return "", false
 	}
 	i++

@@ -26,18 +26,18 @@ func testClient(t *testing.T) *Client {
 func TestClientLazyInitS3(t *testing.T) {
 	t.Parallel()
 	c := testClient(t)
-	if c.s3Client != nil {
-		t.Fatal("s3Client should be nil before first access")
+	if c.cloudTrailClient != nil {
+		t.Fatal("cloudTrailClient should be nil before first access")
 	}
 
-	s3 := c.S3()
+	s3 := c.CloudTrail()
 	if s3 == nil {
-		t.Fatal("S3() should return non-nil client")
+		t.Fatal("CloudTrail() should return non-nil client")
 	}
 
 	// Second call should return the same instance
-	if s3Again := c.S3(); s3 != s3Again {
-		t.Error("S3() should return same instance on subsequent calls")
+	if s3Again := c.CloudTrail(); s3 != s3Again {
+		t.Error("CloudTrail() should return same instance on subsequent calls")
 	}
 }
 
@@ -103,7 +103,7 @@ func TestClientLazyInitConcurrency(t *testing.T) {
 	// Launch concurrent accesses
 	for i := 0; i < 10; i++ {
 		wg.Add(5)
-		go func() { defer wg.Done(); results <- c.S3() }()
+		go func() { defer wg.Done(); results <- c.CloudTrail() }()
 		go func() { defer wg.Done(); results <- c.IAM() }()
 		go func() { defer wg.Done(); results <- c.KMS() }()
 		go func() { defer wg.Done(); results <- c.STS() }()

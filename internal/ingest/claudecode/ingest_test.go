@@ -288,3 +288,63 @@ func TestIngest_EmptyInput(t *testing.T) {
 		t.Fatalf("got %d claims, %d sessions from empty input", len(res.Claims), len(res.Sessions))
 	}
 }
+
+// A shell script is a list of claims, not one claim. The agent that
+// restarted three workloads on dev-eks wrote them into a single Bash call;
+// as one claim it could corroborate only one of the three audit records,
+// and the other two would have been reported as production changes nobody
+// admitted to.
+func TestIngest_ScriptClaimsEachCommand(t *testing.T) {
+	t.Parallel()
+	script := "export PATH=\\\"/opt/homebrew/bin\\\"\\nK=/usr/local/bin/kubectl\\necho restarting\\n" +
+		"$K -n monitoring rollout restart ds/alloy 2>&1\\n" +
+		"$K -n opencost rollout restart deploy/opencost 2>&1"
+	res := ingest(t, Options{},
+		assistantLine("uuid-1", "2026-07-13T04:21:27Z", "toolu_01A", "Bash", `{"command":"`+script+`"}`),
+		resultLine("uuid-2", "2026-07-13T04:22:00Z", "toolu_01A", false),
+	)
+
+	if len(res.Claims) != 2 {
+		t.Fatalf("claims = %d, want 2 (one per kubectl invocation): %+v", len(res.Claims), res.Claims)
+	}
+	for i, want := range []string{
+		"/usr/local/bin/kubectl -n monitoring rollout restart ds/alloy",
+		"/usr/local/bin/kubectl -n opencost rollout restart deploy/opencost",
+	} {
+		if got := res.Claims[i].Target; got != want {
+			t.Errorf("claim[%d].Target = %q, want %q", i, got, want)
+		}
+	}
+	// Unique IDs: the matcher consumes one record per claim, so two claims
+	// sharing an ID would collapse back into one.
+	if res.Claims[0].ID == res.Claims[1].ID {
+		t.Errorf("split claims share ID %q", res.Claims[0].ID)
+	}
+	// Provenance is unchanged: both commands are written on that one line,
+	// so both remain re-fetchable from it.
+	a, b := res.Claims[0].Raw, res.Claims[1].Raw
+	if a != b || a.Digest == "" {
+		t.Errorf("split claims must share the tool call's provenance: %+v vs %+v", a, b)
+	}
+	if !strings.Contains(a.Locator, "toolu_01A") {
+		t.Errorf("locator %q no longer points at the tool call", a.Locator)
+	}
+}
+
+// A shell command the translators do not recognize is still a claim — it
+// may well have done something (terraform, curl); we simply cannot
+// corroborate it. Dropping it would erase the claim rather than fail to
+// match it.
+func TestIngest_UnrecognizedScriptStaysOneClaim(t *testing.T) {
+	t.Parallel()
+	res := ingest(t, Options{},
+		assistantLine("uuid-1", "2026-07-13T04:21:27Z", "toolu_01A", "Bash", `{"command":"terraform apply -auto-approve\\ncurl -XPOST https://grafana/api/dashboards/db"}`),
+		resultLine("uuid-2", "2026-07-13T04:22:00Z", "toolu_01A", false),
+	)
+	if len(res.Claims) != 1 {
+		t.Fatalf("claims = %d, want 1", len(res.Claims))
+	}
+	if res.Claims[0].ID != "toolu_01A" {
+		t.Errorf("ID = %q, want the unsuffixed tool-use ID", res.Claims[0].ID)
+	}
+}

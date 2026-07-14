@@ -11,12 +11,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Attribution Audit — crossbearing</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
+    <!-- No webfonts, by design. This document is evidence: it is read by an
+         auditor, often long after the fact and sometimes on an air-gapped
+         machine, and it must render identically and completely with no network
+         at all. A stylesheet fetched from a CDN is a beacon that tells a third
+         party when and from where an audit was opened, and a document that
+         silently degrades when the fetch fails. The stacks below resolve
+         locally on every platform. -->
     <style>
       :root {
         --paper: #f2efe9;
@@ -26,9 +27,9 @@
         --ink-500: #3c5067;
         --ink-400: #5a6f86;
         --fix: #0b96d6;
-        --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
-        --mono: "IBM Plex Mono", ui-monospace, monospace;
-        --display: "Fraunces", Georgia, serif;
+        --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+        --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        --display: "Fraunces", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
       }
       * { margin: 0; padding: 0; box-sizing: border-box; }
       body {
@@ -67,6 +68,15 @@
       }
       .headline em { font-style: italic; color: var(--fix); font-weight: 600; }
       .subhead { color: var(--ink-500); font-size: 14px; max-width: 62ch; }
+      /* The report's standing statement of what it does NOT claim. It sits
+         under every headline, in all three modes, on purpose: the reader
+         must never be able to take a finding — or the absence of one — for
+         a verdict on whether the action was allowed. */
+      .scope {
+        color: var(--ink-500); font-size: 13px; max-width: 68ch; margin-top: 14px;
+        padding-left: 12px; border-left: 2px solid var(--paper-200);
+      }
+      .scope em { color: var(--ink); font-style: normal; font-weight: 600; }
       .strip {
         display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px; background: var(--paper-200);
         border: 1px solid var(--paper-200); margin: 22px 0 6px;
@@ -181,16 +191,34 @@
         No production action is orphaned. Where the agent's own account disagrees with what
         your cloud logged is below. A receipt alone would miss that gap.
       </p>
+      {{else if eq .Mode "unbound"}}
+      <h1 class="headline">
+        Nothing here diverges. And <em>nothing names who acted.</em>
+      </h1>
+      <p class="subhead">
+        Across {{.Sessions}} agent sessions, every claim your agents made is borne
+        out by the record. But no convention in your cloud binds those sessions to
+        a person — so the record can say what happened, and cannot say who did it.
+        That is the gap, and it is the one this report exists to close.
+      </p>
       {{else}}
       <h1 class="headline">
-        Every production-touching action in this window <em>traces to a named human.</em>
+        Every production-touching action in this window <em>traces to a named human</em>,
+        and every claim <em>matches the record.</em>
       </h1>
       <p class="subhead">
         Across {{.Sessions}} agent sessions, your cloud's own record binds each action to a
-        person, and each claim matches the record. That is the answer an auditor wants. Most
-        accounts can't give it.
+        person, and each agent's account of what it did is borne out. Most accounts can't
+        answer either question.
       </p>
       {{end}}
+
+      <p class="scope">
+        This report answers two questions from your cloud's own records: <em>who acted</em>,
+        and <em>did they say so</em>. It does not answer whether what they did was permitted.
+        An action can be fully attributed, faithfully claimed, and still be one you would
+        never have approved — that judgment is yours, and we do not make it for you.
+      </p>
 
       <div class="strip" style="grid-template-columns: repeat({{len .Stats}}, 1fr)">
         {{range .Stats}}

@@ -98,7 +98,7 @@ func TestIngest_ConverseExecutedClaim(t *testing.T) {
 func TestIngest_DerivedOperationMeetsK8sRecord(t *testing.T) {
 	res := ingestString(t, conversePair, Options{SessionKey: "session"})
 	m := corroborate.DeriveOperationMap(res.Claims)
-	ops := m[res.Claims[0].Operation]
+	ops := m[corroborate.ClaimKey(res.Claims[0])]
 	want := "k8s-audit:update:deployments/scale"
 	found := false
 	for _, o := range ops {
@@ -334,4 +334,61 @@ func FuzzIngest(f *testing.F) {
 		// Must never panic on arbitrary input, only ever skip bad entries.
 		_, _ = New(nil, Options{SessionKey: "session"}).Ingest(strings.NewReader(s), "fuzz")
 	})
+}
+
+// The claim-splitting fix must reach BOTH claim streams. bedrock emits the same
+// Bash(…) claims over the same CLI translators, and it exists precisely for
+// kagent-style agents that emit no transcript — which is the Kubernetes path,
+// which is where the scripts are. Fixed only in claudecode, a forty-command
+// script observed through Bedrock still corroborates one record and reports the
+// other thirty-nine as unclaimed.
+func TestIngest_ShellToolScriptClaimsEachCommand(t *testing.T) {
+	const script = `[
+ {
+  "schemaType":"ModelInvocationLog","schemaVersion":"1.0",
+  "timestamp":"2026-06-11T10:00:00Z","accountId":"111122223333","region":"us-west-2",
+  "requestId":"req-1","operation":"Converse","modelId":"anthropic.claude-sonnet-4",
+  "identity":{"arn":"arn:aws:sts::111122223333:assumed-role/kagent-agent/sess-1"},
+  "requestMetadata":{"session":"kagent-abc"},
+  "input":{"inputBodyJson":{"messages":[{"role":"user","content":[{"text":"restart them"}]}]}},
+  "output":{"outputBodyJson":{"output":{"message":{"role":"assistant","content":[
+     {"toolUse":{"toolUseId":"tu-1","name":"shell","input":{"command":"K=kubectl\nexport NS=monitoring\n$K -n monitoring rollout restart ds/alloy 2>&1\n$K -n opencost rollout restart deploy/opencost"}}}
+  ]}},"stopReason":"tool_use"}}
+ },
+ {
+  "schemaType":"ModelInvocationLog","schemaVersion":"1.0",
+  "timestamp":"2026-06-11T10:04:00Z","accountId":"111122223333","region":"us-west-2",
+  "requestId":"req-2","operation":"Converse","modelId":"anthropic.claude-sonnet-4",
+  "identity":{"arn":"arn:aws:sts::111122223333:assumed-role/kagent-agent/sess-1"},
+  "requestMetadata":{"session":"kagent-abc"},
+  "input":{"inputBodyJson":{"messages":[{"role":"user","content":[
+     {"toolResult":{"toolUseId":"tu-1","content":[{"text":"restarted"}]}}
+  ]}]}},
+  "output":{"outputBodyJson":{"output":{"message":{"role":"assistant","content":[{"text":"done"}]}},"stopReason":"end_turn"}}
+ }
+]`
+	res := ingestString(t, script, Options{SessionKey: "session"})
+
+	if len(res.Claims) != 2 {
+		t.Fatalf("claims = %d, want 2 (one per kubectl invocation): %+v", len(res.Claims), res.Claims)
+	}
+	for i, want := range []string{
+		"kubectl -n monitoring rollout restart ds/alloy",
+		"kubectl -n opencost rollout restart deploy/opencost",
+	} {
+		if got := res.Claims[i].Target; got != want {
+			t.Errorf("claim[%d].Target = %q, want %q", i, got, want)
+		}
+	}
+	if res.Claims[0].ID == res.Claims[1].ID {
+		t.Errorf("split claims share ID %q", res.Claims[0].ID)
+	}
+	// The toolResult's timestamp is the far end of the span the commands ran in.
+	// Without it, a script that sleeps drifts out of the match window.
+	if res.Claims[0].CompletedAt.IsZero() {
+		t.Error("CompletedAt not set — a shell tool that waits is not an instant")
+	}
+	if !res.Claims[0].CompletedAt.After(res.Claims[0].ClaimedAt) {
+		t.Errorf("CompletedAt %v must be after ClaimedAt %v", res.Claims[0].CompletedAt, res.Claims[0].ClaimedAt)
+	}
 }

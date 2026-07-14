@@ -9,46 +9,7 @@ package evidence
 
 import (
 	"context"
-	"errors"
 )
-
-// SignatureRef points at a detached signature covering a payload. The
-// producer does not verify at capture time — verification happens
-// out-of-band via the Verifier, which records the outcome.
-type SignatureRef struct {
-	// KeyRef identifies the signing key, for example an AWS KMS key
-	// ARN, "cosign://<key-id>" or "oidc://issuer=…,subject=…".
-	KeyRef string
-
-	// Bundle is the location of the serialized signature material.
-	// For in-memory captures it may be inline base64; for production
-	// it's an s3://... or oci://... URL.
-	Bundle string
-
-	// Algo names the signing algorithm, e.g. "ECDSA_SHA_256".
-	Algo string
-}
-
-// Fetcher is the verifier-facing interface: given an artifact reference
-// ("mem://...", "s3://...", "oci://..."), return the payload bytes. The
-// production deployment wires an implementation that understands every
-// scheme the capture service writes; tests wire an in-memory one.
-type Fetcher interface {
-	Fetch(ctx context.Context, artifactRef string) ([]byte, error)
-}
-
-// ErrArtifactNotFound is returned by a Fetcher when the referenced
-// artifact does not exist in the backing store. The verifier maps this
-// to Unreachable rather than a digest mismatch, since a missing
-// artifact could be transient (storage being bootstrapped) or
-// permanent (retention policy) — both warrant operator attention.
-var ErrArtifactNotFound = errors.New("evidence artifact not found")
-
-// ErrUnsupportedScheme is returned by a Fetcher that does not understand
-// an artifactRef's scheme. Producers + verifiers must be deployed as a
-// matched pair; a mismatch is surfaced with a clear error rather than
-// silently re-fetched forever.
-var ErrUnsupportedScheme = errors.New("unsupported artifact scheme")
 
 // Signer signs an evidence payload and returns a SignatureBundle that the
 // verifier can validate without trusting the capture service. Implementations:

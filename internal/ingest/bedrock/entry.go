@@ -34,6 +34,7 @@ package bedrock
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/crossbearing/crossbearing/internal/corroborate"
 	"strings"
 	"time"
 )
@@ -239,7 +240,7 @@ func operationAndTarget(tc toolCall) (op, target string) {
 	}
 
 	if cmd, ok := input["command"].(string); ok && cmd != "" {
-		return "Bash(" + truncateCommand(cmd) + ")", cmd
+		return "Bash(" + corroborate.BashOperation(cmd) + ")", cmd
 	}
 	// MCP tools are named mcp__<server>__<tool> by the agent runtime; normalize
 	// to the mcp:<server>:<tool> claim vocabulary (same form claudecode emits)
@@ -252,17 +253,4 @@ func operationAndTarget(tc toolCall) (op, target string) {
 		return "tool", target
 	}
 	return tc.Name, target
-}
-
-// truncateCommand keeps the operation readable in reports: first line only,
-// capped — the full command stays in Claim.Target.
-func truncateCommand(cmd string) string {
-	if i := strings.IndexByte(cmd, '\n'); i >= 0 {
-		cmd = cmd[:i]
-	}
-	const max = 100
-	if len(cmd) > max {
-		return cmd[:max] + "…"
-	}
-	return cmd
 }

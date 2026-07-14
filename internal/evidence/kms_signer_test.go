@@ -7,7 +7,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"errors"
 	"strings"
 	"testing"
 
@@ -107,21 +106,31 @@ func TestKMSSigner_UnsupportedAlgo_Errors(t *testing.T) {
 	}
 }
 
-// TestKMSSignVerify_RoundTrip exercises the full sign→verify loop with fakes
-// that do real ECDSA P-256 crypto in place of KMS: the sign fake signs the
-// digest KMSSigner submits, the bundle's signature bytes are staged behind
-// the Fetcher (as the capture path would), and the verify fake checks the
-// digest KMSVerifier submits against the same key pair. Proves the two
-// halves agree on pre-hashing + MessageType=DIGEST end-to-end, and that a
-// tampered payload is rejected.
-func TestKMSSignVerify_RoundTrip(t *testing.T) {
+// testKeyARN is the KMS key every signer test signs under.
+const testKeyARN = "arn:aws:kms:us-east-1:111111111111:key/abc"
+
+// TestKMSSign_VerifiesWithStdlibCrypto proves the signer's contract end to end
+// against real ECDSA P-256, with no help from any code of ours: the fake KMS
+// signs exactly the bytes KMSSigner submits, and the resulting signature is
+// checked with crypto/ecdsa directly.
+//
+// It is deliberately verified with the standard library rather than a Verifier
+// of our own. The engine no longer HAS one — the evidence package is verified by
+// the separate zero-dependency MIT tool in crossbearing/verify, which never
+// imports this repo, and a round-trip through our own verifier could only ever
+// prove the two halves agree with each other. Signing a payload larger than
+// KMS's 4096-byte inline limit exercises the pre-digest / MessageType=DIGEST
+// path, which is where the contract actually lives.
+func TestKMSSign_VerifiesWithStdlibCrypto(t *testing.T) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
 
+	var signed []byte // the exact bytes KMSSigner asked KMS to sign
 	s := NewKMSSigner(&fakeSignKMS{
 		sign: func(in *kms.SignInput) (*kms.SignOutput, error) {
+			signed = append([]byte(nil), in.Message...)
 			sigBytes, err := ecdsa.SignASN1(rand.Reader, key, in.Message)
 			if err != nil {
 				return nil, err
@@ -130,31 +139,27 @@ func TestKMSSignVerify_RoundTrip(t *testing.T) {
 		},
 	}, testKeyARN)
 
-	payload := bytes.Repeat([]byte("round-trip-evidence;"), 500) // > 4096, exercises DIGEST path
+	payload := bytes.Repeat([]byte("round-trip-evidence;"), 500) // > 4096: the DIGEST path
 	bundle, err := s.Sign(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
 
-	// Stage the detached signature where the verifier's Fetcher resolves
-	// the Bundle URL, exactly as the capture path writes `<artifactRef>.sig`.
-	v := NewKMSVerifier(&fakeKMS{
-		verify: func(in *kms.VerifyInput) (*kms.VerifyOutput, error) {
-			return &kms.VerifyOutput{
-				SignatureValid: ecdsa.VerifyASN1(&key.PublicKey, in.Message, in.Signature),
-			}, nil
-		},
-	}, &kmsTestFetcher{bundles: map[string][]byte{testBundle: bundle.Signature}})
-
-	ref := SignatureRef{KeyRef: bundle.KeyRef, Algo: bundle.Algo, Bundle: testBundle}
-	if err := v.Verify(context.Background(), payload, ref); err != nil {
-		t.Fatalf("round-trip verify: %v", err)
+	// The signer must have pre-hashed: KMS sees the digest, never the payload.
+	want := sha256.Sum256(payload)
+	if !bytes.Equal(signed, want[:]) {
+		t.Fatalf("KMS was handed %d bytes; it must be handed the sha256 digest of the payload", len(signed))
+	}
+	if bundle.KeyRef != testKeyARN {
+		t.Errorf("KeyRef = %q, want %q", bundle.KeyRef, testKeyARN)
+	}
+	if !ecdsa.VerifyASN1(&key.PublicKey, want[:], bundle.Signature) {
+		t.Fatal("the signature does not verify against the payload digest")
 	}
 
-	// A tampered payload hashes to a different digest and must fail.
-	tampered := append([]byte("tamper:"), payload...)
-	err = v.Verify(context.Background(), tampered, ref)
-	if !errors.Is(err, ErrSignatureInvalid) {
-		t.Errorf("tampered payload: expected ErrSignatureInvalid, got %v", err)
+	// A tampered payload hashes differently and must not verify.
+	tampered := sha256.Sum256(append([]byte("tamper:"), payload...))
+	if ecdsa.VerifyASN1(&key.PublicKey, tampered[:], bundle.Signature) {
+		t.Error("a tampered payload verified against the original signature")
 	}
 }

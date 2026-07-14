@@ -1,6 +1,6 @@
 // Package aws provides lean AWS SDK client wrappers with OIDC federation
 // support, trimmed to the five services the collector needs: CloudTrail,
-// IAM, KMS, S3, and STS.
+// IAM, KMS, and STS.
 package aws
 
 import (
@@ -17,7 +17,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/cloudtrail"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
@@ -78,7 +77,6 @@ type Client struct {
 	cloudTrailClient *cloudtrail.Client
 	iamClient        *iam.Client
 	kmsClient        *kms.Client
-	s3Client         *s3.Client
 }
 
 // lazyInit provides double-checked locking for lazy service client initialization.
@@ -296,7 +294,7 @@ func (c *Client) WithRegion(ctx context.Context, region string) (*Client, error)
 }
 
 // Close releases all cached AWS service clients and marks the factory as closed.
-// After Close, accessor methods (S3(), IAM(), etc.) return nil because
+// After Close, accessor methods (IAM(), KMS(), etc.) return nil because
 // closedGuard fires and the underlying pointers have been nilled.
 // Close is safe to call multiple times.
 func (c *Client) Close() {
@@ -313,7 +311,6 @@ func (c *Client) Close() {
 	c.cloudTrailClient = nil
 	c.iamClient = nil
 	c.kmsClient = nil
-	c.s3Client = nil
 
 	c.closed = true
 }
