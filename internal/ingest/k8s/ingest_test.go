@@ -330,3 +330,30 @@ func TestIngest_NonResourceRequestsAreNotActions(t *testing.T) {
 		t.Errorf("ID = %q, want the one request that touched a resource", res.Records[0].ID)
 	}
 }
+
+// One corrupt line used to abandon the rest of the stream, counted as a single
+// bad doc — so a truncated line in a 100,000-line EKS export produced a
+// confident report over the records before it and a warning that said "1". The
+// report did not merely miss a divergence, it affirmatively denied one over
+// input it never read. JSONL resyncs at the newline; the repo's own jsonl.go
+// already does this for github/gcp/azure.
+func TestIngest_CorruptLineDoesNotAbandonTheStream(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		eksEvent("audit-1", "patch", eksSSOUser, "ASIAKEY", t0),
+		`{"kind":"Event","auditID":"audit-BROKEN","stage":"Respo`, // truncated mid-write
+		eksEvent("audit-2", "delete", eksSSOUser, "ASIAKEY", t0.Add(time.Minute)),
+		eksEvent("audit-3", "create", eksSSOUser, "ASIAKEY", t0.Add(2*time.Minute)),
+	}, "\n") + "\n"
+
+	res := ingest(t, Options{}, input)
+
+	if len(res.Records) != 3 {
+		t.Fatalf("records = %d, want 3 — the corrupt line must cost one line, not the rest of the log", len(res.Records))
+	}
+	for i, want := range []string{"audit-1", "audit-2", "audit-3"} {
+		if res.Records[i].ID != want {
+			t.Errorf("record[%d].ID = %q, want %q", i, res.Records[i].ID, want)
+		}
+	}
+}

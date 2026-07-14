@@ -27,7 +27,7 @@ import "strings"
 // defaulting all remain untranslatable, and a segment that still holds an
 // unresolved "$" simply fails to match a CLI, as before.
 func shellCommands(cmd string) [][]string {
-	segs := shellSegments(cmd)
+	segs := shellSegments(stripHeredocs(cmd))
 	vars := make(map[string]string)
 	out := make([][]string, 0, len(segs))
 	for _, seg := range segs {
@@ -44,6 +44,71 @@ func shellCommands(cmd string) [][]string {
 		}
 	}
 	return out
+}
+
+// stripHeredocs removes heredoc BODIES before lexing. A heredoc body is data
+// being written somewhere, not commands being run:
+//
+//	cat > deploy.sh <<'EOF'
+//	aws s3api delete-bucket --bucket prod-payments
+//	EOF
+//
+// The agent wrote a file. It did not delete a bucket. With no heredoc state the
+// lexer read that middle line as a command segment and the engine MINTED a claim
+// from it — and a claim for a command that never ran can be corroborated by
+// somebody else's record, which erases their divergence and reports the agent as
+// having done a thing it did not do. Writing script files by heredoc is routine
+// agent behaviour, so this is not an exotic input.
+//
+// The delimiter line itself and the command that opened the heredoc both stay:
+// `cat > deploy.sh` is a real command, merely one no record stream holds.
+func stripHeredocs(cmd string) string {
+	if !strings.Contains(cmd, "<<") {
+		return cmd // the overwhelmingly common case, at no cost
+	}
+	lines := strings.Split(cmd, "\n")
+	out := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); i++ {
+		out = append(out, lines[i])
+		delim, ok := heredocDelimiter(lines[i])
+		if !ok {
+			continue
+		}
+		// Swallow the body up to (and including) the delimiter line.
+		for i+1 < len(lines) {
+			i++
+			if strings.TrimSpace(lines[i]) == delim {
+				break
+			}
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// heredocDelimiter finds the word a `<<WORD` / `<<-WORD` / `<<'WORD'` redirection
+// will read until. `<<<` is a here-STRING — one line, no body — and is not one.
+func heredocDelimiter(line string) (string, bool) {
+	i := strings.Index(line, "<<")
+	if i < 0 {
+		return "", false
+	}
+	rest := line[i+2:]
+	if strings.HasPrefix(rest, "<") { // <<< here-string: no body to swallow
+		return "", false
+	}
+	rest = strings.TrimPrefix(rest, "-") // <<- strips leading tabs; same delimiter
+	rest = strings.TrimLeft(rest, " \t")
+	// The delimiter may be quoted (<<'EOF' / <<"EOF"); quoting only decides
+	// whether the BODY expands, which is irrelevant — we are discarding it.
+	rest = strings.TrimLeft(rest, "'\"")
+	end := strings.IndexAny(rest, " \t'\"")
+	if end >= 0 {
+		rest = rest[:end]
+	}
+	if rest == "" {
+		return "", false
+	}
+	return rest, true
 }
 
 // stripRedirections drops I/O redirection from a segment: it plumbs the
@@ -125,13 +190,18 @@ func isRedirectOperator(t string) bool {
 // manufacture unrecorded-claim findings for work no audit log was ever going
 // to hold.
 //
-// The known imprecision: a command inside a branch or loop that did not
-// execute is still claimed, because the tool_result proves the script ran,
-// not which lines it reached. That over-claims toward UnrecordedClaim — an
-// agent credited with something no record shows — which is the safe
-// direction. The unsafe direction would be crediting a record to a claim
-// that never ran, and that stays impossible: an invocation the script does
-// not contain is never emitted.
+// Over-claiming is possible and accepted: a command inside a branch that never
+// ran is still returned, because the tool_result proves the script ran, not
+// which lines it reached. That is SAFE only because the matcher will not let a
+// claim consume a record it would otherwise have to report as Unattributed
+// unless the agent's ownership of that record is positively established
+// (MatchPolicy.AgentRecord). Without that guard an over-claim can be corroborated
+// by a stranger's record, which erases the stranger's divergence — see
+// canConsume.
+//
+// Text that was never a command at all is a different matter and is excluded
+// outright: heredoc bodies (stripHeredocs) and segments left holding an
+// unresolved `$` (hasUnresolved).
 func CLIInvocations(command string) []string {
 	var out []string
 	for _, seg := range shellCommands(command) {
@@ -151,7 +221,7 @@ func CLIInvocations(command string) []string {
 // times, and CLIInvocations then re-lexed each reconstructed segment five times
 // more. Working from tokens collapses that to one lex per command.
 func segmentOps(seg []string) []string {
-	if len(seg) == 0 {
+	if len(seg) == 0 || hasUnresolved(seg) {
 		return nil
 	}
 	var ops []string
@@ -281,6 +351,27 @@ func varRef(t string) (string, bool) {
 		}
 	}
 	return name, true
+}
+
+// hasUnresolved reports whether any token still carries a `$` after expansion.
+//
+// It survives two things this translator cannot read: a variable it never saw
+// assigned, and the remains of a command substitution (the lexer breaks
+// `$(kubectl get pods -o name)` at the parenthesis, leaving a bare `$` behind).
+// In both cases an argument of the command is UNKNOWN — `kubectl delete pod $`
+// deletes a pod whose name we cannot name — and the reconstructed line would
+// misdescribe what ran. A claim must never describe a command the agent did not
+// run, so the segment contributes nothing.
+//
+// The substituted command itself is lexed as its own segment and is still
+// claimed, which is right: it genuinely executed.
+func hasUnresolved(seg []string) bool {
+	for _, t := range seg {
+		if strings.ContainsRune(t, '$') {
+			return true
+		}
+	}
+	return false
 }
 
 // isCommand reports whether a command-position token invokes the named

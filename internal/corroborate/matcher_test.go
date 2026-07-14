@@ -256,3 +256,113 @@ func TestJoin_NoCompletedAtIsPointMatchedAsBefore(t *testing.T) {
 		t.Errorf("corroborated = %d, want 0 — with no completion time the claim is a point and the record is 40m away", n)
 	}
 }
+
+// THE catastrophic case, and the reason the join is identity-aware.
+//
+// An agent writes a deploy script with a heredoc. It never runs the deletion the
+// script names. In the same window a HUMAN deletes that production bucket. With
+// the join correlating on time and operation alone, the human's record was
+// consumed as Corroborated — the agent was credited with an action it never
+// performed, and the human's unattributed production deletion VANISHED from the
+// report. A report that affirmatively denies a divergence is the worst verdict
+// this engine can reach.
+func TestJoin_ForeignRecordIsNeverCorroborated(t *testing.T) {
+	t.Parallel()
+	sessions := []Session{{ID: "agent", StartedAt: t0, EndedAt: t0.Add(time.Hour)}}
+	claims := []Claim{{
+		ID: "toolu_1", SessionID: "agent",
+		Operation: "Bash(aws s3api delete-bucket --bucket prod-payments)",
+		Target:    "aws s3api delete-bucket --bucket prod-payments",
+		ClaimedAt: t0, CompletedAt: t0.Add(time.Second),
+	}}
+	records := []Record{{
+		ID: "ct-human", Operation: "s3:DeleteBucket",
+		Principal:          "arn:aws:iam::111122223333:user/dana", // a person, not the agent
+		AccessKeyID:        "AKIAHUMANKEY",
+		Targets:            []string{"arn:aws:s3:::prod-payments"},
+		ProductionTouching: true,
+		RecordedAt:         t0.Add(3 * time.Minute),
+	}}
+	p := MatchPolicy{Window: 20 * time.Minute, OperationMap: DeriveOperationMap(claims)}
+
+	rep := Join(sessions, claims, records, p)
+
+	if n := rep.Tally()[Corroborated]; n != 0 {
+		t.Errorf("corroborated = %d, want 0 — a stranger's production deletion was credited to the agent", n)
+	}
+	if n := rep.Tally()[Unattributed]; n != 1 {
+		t.Errorf("unattributed = %d, want 1 — the human's production deletion must still be reported", n)
+	}
+	if n := rep.Tally()[UnrecordedClaim]; n != 1 {
+		t.Errorf("unrecordedClaim = %d, want 1 — the agent's claim has no record of its own", n)
+	}
+}
+
+// The agent's OWN production actions are the same shape as a stranger's — and
+// they must still corroborate. The credential is proved without circularity: a
+// non-escalating corroboration (a read, a non-production write) shows which
+// credential the agent holds, and only then may it be credited with the actions
+// that would otherwise be unattributed.
+func TestJoin_AgentsOwnProductionActionCorroborates(t *testing.T) {
+	t.Parallel()
+	sessions := []Session{{ID: "agent", StartedAt: t0, EndedAt: t0.Add(time.Hour)}}
+	claims := []Claim{
+		// A harmless read: proves the credential is the agent's.
+		{ID: "c1", SessionID: "agent", Operation: "Bash(aws sts get-caller-identity)",
+			Target: "aws sts get-caller-identity", ClaimedAt: t0, CompletedAt: t0},
+		// A production write under the SAME credential.
+		{ID: "c2", SessionID: "agent", Operation: "Bash(aws s3api delete-bucket --bucket prod-payments)",
+			Target: "aws s3api delete-bucket --bucket prod-payments", ClaimedAt: t0.Add(time.Minute), CompletedAt: t0.Add(time.Minute)},
+	}
+	records := []Record{
+		{ID: "ct-1", Operation: "sts:GetCallerIdentity", AccessKeyID: "ASIAAGENTKEY",
+			Principal: "arn:aws:sts::1:assumed-role/agent/bot", RecordedAt: t0.Add(2 * time.Second)},
+		{ID: "ct-2", Operation: "s3:DeleteBucket", AccessKeyID: "ASIAAGENTKEY",
+			Principal: "arn:aws:sts::1:assumed-role/agent/bot", ProductionTouching: true,
+			Targets: []string{"arn:aws:s3:::prod-payments"}, RecordedAt: t0.Add(70 * time.Second)},
+	}
+	p := MatchPolicy{Window: 20 * time.Minute, OperationMap: DeriveOperationMap(claims)}
+
+	rep := Join(sessions, claims, records, p)
+
+	if n := rep.Tally()[Corroborated]; n != 2 {
+		t.Fatalf("corroborated = %d, want 2 — the agent's own production action must corroborate once its credential is proved; findings: %+v", n, rep.Findings)
+	}
+	if n := rep.Tally()[Unattributed]; n != 0 {
+		t.Errorf("unattributed = %d, want 0 — the record IS the agent's, proved by ct-1's shared credential", n)
+	}
+}
+
+// A claim whose true record is momentarily out of reach must not STEAL an
+// unrelated one and report it as a Mismatch — that invents a divergence out of
+// two unrelated facts. Mismatches are matched last, after every agreeing pair
+// has been settled.
+func TestJoin_MismatchNeverStealsAnAgreeingRecord(t *testing.T) {
+	t.Parallel()
+	sessions := []Session{{ID: "agent", StartedAt: t0, EndedAt: t0.Add(time.Hour)}}
+	claims := []Claim{
+		{ID: "reader", SessionID: "agent", Operation: "Bash(aws s3api get-bucket-policy --bucket prod-x)",
+			Target: "aws s3api get-bucket-policy --bucket prod-x", ClaimedAt: t0, CompletedAt: t0},
+		{ID: "lister", SessionID: "agent", Operation: "Bash(aws iam list-access-keys)",
+			Target: "aws iam list-access-keys", ClaimedAt: t0.Add(time.Minute), CompletedAt: t0.Add(time.Minute)},
+	}
+	records := []Record{
+		// Nothing agrees with `reader`. It must NOT take the lister's record.
+		{ID: "ct-keys", Operation: "iam:ListAccessKeys", AccessKeyID: "K", RecordedAt: t0.Add(30 * time.Second)},
+	}
+	p := MatchPolicy{Window: 20 * time.Minute, OperationMap: DeriveOperationMap(claims)}
+
+	rep := Join(sessions, claims, records, p)
+
+	for _, f := range rep.Findings {
+		if f.Kind == Mismatch && f.Claim.ID == "reader" {
+			t.Errorf("the reader claim stole %s and reported a Mismatch; the record belongs to the lister", f.Record.ID)
+		}
+		if f.Kind == Corroborated && f.Claim.ID != "lister" {
+			t.Errorf("ct-keys corroborated the wrong claim: %s", f.Claim.ID)
+		}
+	}
+	if n := rep.Tally()[Corroborated]; n != 1 {
+		t.Errorf("corroborated = %d, want 1 (the lister)", n)
+	}
+}

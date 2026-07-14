@@ -20,7 +20,6 @@
 package k8s
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -404,18 +403,40 @@ func isHumanUsername(user string) bool {
 // auditID identifies and what a re-fetch would return. A malformed tail
 // stops the stream (JSON gives no resync point) and is counted, not fatal.
 func splitEvents(r io.Reader) (raws []json.RawMessage, badDocs int, err error) {
-	dec := json.NewDecoder(bufio.NewReader(r))
-	for {
-		var doc json.RawMessage
-		err := dec.Decode(&doc)
-		if err == io.EOF {
-			return raws, badDocs, nil
-		}
-		if err != nil {
-			return raws, badDocs + 1, nil
-		}
-		raws = append(raws, unwrap(bytes.TrimSpace(doc))...)
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to read k8s audit log: %w", err)
 	}
+	for off := 0; off < len(data); {
+		dec := json.NewDecoder(bytes.NewReader(data[off:]))
+		var doc json.RawMessage
+		switch err := dec.Decode(&doc); {
+		case err == io.EOF:
+			return raws, badDocs, nil
+		case err != nil:
+			// A malformed document used to ABANDON the stream, counted as ONE bad
+			// doc — so a single truncated line 500 of a 100,000-line EKS export
+			// produced a confident report over 499 records and a warning that
+			// said "1". On an evidence engine that is the worst shape a bug can
+			// take: the report does not merely miss a divergence, it
+			// affirmatively denies one, over input it never read.
+			//
+			// The primary input is JSONL, where the newline IS the resync point.
+			// Skip the bad line and keep reading — the same contract
+			// SplitJSONArrayOrLines already gives github/gcp/azure. Every skipped
+			// line is counted, and Ingest warns on any nonzero count.
+			badDocs++
+			nl := bytes.IndexByte(data[off:], '\n')
+			if nl < 0 {
+				return raws, badDocs, nil // a malformed tail with no line to resync to
+			}
+			off += nl + 1
+		default:
+			raws = append(raws, unwrap(bytes.TrimSpace(doc))...)
+			off += int(dec.InputOffset())
+		}
+	}
+	return raws, badDocs, nil
 }
 
 // unwrap turns one decoded document into the audit Events inside it. An

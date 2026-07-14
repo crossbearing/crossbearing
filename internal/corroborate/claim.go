@@ -54,12 +54,28 @@ func BashOperation(cmd string) string {
 // still have done something real (a terraform apply, a curl to some API), and
 // dropping it would erase the claim rather than fail to corroborate it.
 //
-// Known imprecision, accepted: a command inside a branch or loop that never ran
-// is still claimed, because the tool_result proves the script ran, not which
-// lines it reached. That over-claims toward UnrecordedClaim — an agent credited
-// with something no record shows — which is the safe direction. The unsafe
-// direction stays impossible: an invocation the script does not contain is never
-// emitted, so no record can be credited to a claim that never ran.
+// Known imprecision: a command inside a branch or loop that never ran is still
+// claimed, because the tool_result proves the script ran, not which lines it
+// reached. `if [ "$ENV" = staging ]; then kubectl delete deploy/api; fi` in prod
+// mints a claim for a deletion that never happened.
+//
+// This comment used to assert that the unsafe direction was "impossible", and it
+// was wrong. An over-claimed invocation is only safe if nothing can credit it
+// with somebody ELSE's record — and the matcher used to correlate on time and
+// operation alone, with no test of who produced what. A phantom claim could
+// therefore consume a human's production deletion, report it Corroborated, and
+// erase that human's unattributed action from the report entirely.
+//
+// What makes over-claiming safe is not this function. It is
+// MatchPolicy.AgentRecord and canConsume in the matcher: a record the report
+// would otherwise escalate to Unattributed can only be consumed by a claim when
+// the agent's ownership of it is POSITIVELY established. An over-claim now falls
+// to UnrecordedClaim — an agent credited with something no record shows — which
+// is the direction this engine is allowed to be wrong in.
+//
+// Heredoc bodies and command substitutions are excluded upstream (stripHeredocs,
+// hasUnresolved): those are not over-claims but claims about text that was never
+// a command at all.
 func ExpandShellClaim(c Claim) []Claim {
 	if !strings.HasPrefix(c.Operation, "Bash(") || c.Target == "" {
 		return []Claim{c}
