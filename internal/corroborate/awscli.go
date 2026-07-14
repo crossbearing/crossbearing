@@ -28,21 +28,53 @@ var cliTranslators = []func(string) []string{
 	AzRecordOps,      // az …           → azure-activity vocabulary
 }
 
+// ClaimKey is the OperationMap key that identifies what a claim actually
+// did. For most claims that is the Operation itself — "mcp:github:
+// create_pull_request" names one action.
+//
+// A shell claim is different, and the difference is load-bearing. Its
+// Operation is a human-readable summary — the command's first line, capped
+// for the report — while the command it ran lives in Target. Agents write
+// scripts, and scripts share first lines:
+//
+//	Bash(export PATH="/opt/homebrew/bin")   →  … $K -n argocd get secret x
+//	Bash(export PATH="/opt/homebrew/bin")   →  … $K -n prod delete deploy/api
+//
+// Keyed by Operation, those two collapse into one entry whose record-ops
+// are the UNION of both — and the matcher will then happily corroborate
+// the secret-read claim against the deletion record, because the union says
+// that operation is a legitimate product of that claim. A false
+// corroboration is the worst verdict this engine can reach: it does not
+// merely lose a finding, it reports a divergence as accounted for, which is
+// the precise opposite of the job. Keying on the command keeps every
+// distinct command's translation to itself.
+func ClaimKey(c Claim) string {
+	if strings.HasPrefix(c.Operation, "Bash(") && c.Target != "" {
+		return c.Target
+	}
+	return c.Operation
+}
+
 // DeriveOperationMap builds OperationMap entries for claims whose targets
 // are shell commands invoking CLIs whose record streams the engine
-// ingests (aws, kubectl, gh, git push). Claims that derive no entries are
-// simply absent — callers use presence in the map to scope which claims
-// can seek records at all.
+// ingests (aws, kubectl, gh, git push). Entries are keyed by ClaimKey, so
+// each distinct command carries its own translation. Claims that derive no
+// entries are simply absent — callers use presence in the map to scope
+// which claims can seek records at all.
 func DeriveOperationMap(claims []Claim) map[string][]string {
 	m := make(map[string][]string)
 	for _, c := range claims {
 		if !strings.HasPrefix(c.Operation, "Bash(") {
 			continue
 		}
-		for _, translate := range cliTranslators {
-			for _, op := range translate(c.Target) {
-				if !contains(m[c.Operation], op) {
-					m[c.Operation] = append(m[c.Operation], op)
+		key := ClaimKey(c)
+		// One lex per claim: segmentOps translates the tokens directly, where
+		// running the five RecordOps entry points would lex the same command
+		// five times over.
+		for _, seg := range shellCommands(c.Target) {
+			for _, op := range segmentOps(seg) {
+				if !contains(m[key], op) {
+					m[key] = append(m[key], op)
 				}
 			}
 		}
@@ -57,7 +89,7 @@ func DeriveOperationMap(claims []Claim) map[string][]string {
 // nothing.
 func AWSCLIRecordOps(command string) []string {
 	var ops []string
-	for _, seg := range shellSegments(command) {
+	for _, seg := range shellCommands(command) {
 		if op, ok := awsInvocation(seg); ok {
 			ops = append(ops, op)
 		}
@@ -98,7 +130,7 @@ func awsInvocation(tokens []string) (string, bool) {
 	for i < len(tokens) && (isEnvAssign(tokens[i]) || commandWrappers[tokens[i]]) {
 		i++
 	}
-	if i >= len(tokens) || tokens[i] != "aws" {
+	if i >= len(tokens) || !isCommand(tokens[i], "aws") {
 		return "", false
 	}
 	i++

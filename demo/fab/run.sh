@@ -18,5 +18,7 @@ go run ./cmd/crossbearing report \
   --k8s-audit        demo/fab/k8s-audit.jsonl   --k8s-cluster prod-eks \
   --aws-cloudtrail   demo/fab/aws-cloudtrail.json \
   --github-audit     demo/fab/github-audit.jsonl --github-org acme \
+  --operator         alice@acme.com \
+  --principal        agent-runtime,alice \
   --production-match prod \
   "$@"

@@ -180,6 +180,7 @@ func (g *Ingester) record(e *eventData, raw []byte) corroborate.Record {
 		Principal:  e.Caller,
 		Targets:    targets,
 		RecordedAt: e.EventTimestamp,
+		ReadOnly:   strings.HasSuffix(strings.ToLower(e.OperationName.Value), "/read"),
 		Raw: corroborate.Provenance{
 			Locator: "azure-activity:" + g.opts.Subscription + "#" + e.EventDataID,
 			Digest:  corroborate.DigestHex(raw),

@@ -79,8 +79,13 @@ type pendingClaim struct {
 // emitted — including errored ones, since a failed command still ran.
 func (g *Ingester) Ingest(r io.Reader, locator string) (Result, error) {
 	var (
-		pending  = make(map[string]pendingClaim) // tool_use ID → claim
-		executed = make(map[string]bool)         // tool_use IDs with results
+		pending = make(map[string]pendingClaim) // tool_use ID → claim
+		// tool_use ID → when its result arrived. The timestamp is not decoration:
+		// it is the moment the agent's own stream PROVED the call executed, and
+		// therefore the far end of the span in which the command could have run.
+		// A script that sleeps 90s and waits on a rollout is not an instant, and
+		// every command split out of it inherits the call's start time.
+		executed = make(map[string]time.Time)    // tool_use ID → result time
 		windows  = make(map[string][2]time.Time) // sessionId → [first, last] entry time
 		order    int
 		lineNo   int
@@ -116,13 +121,16 @@ func (g *Ingester) Ingest(r io.Reader, locator string) (Result, error) {
 	var res Result
 	claims := make([]pendingClaim, 0, len(pending))
 	for id, pc := range pending {
-		if executed[id] {
-			claims = append(claims, pc)
+		at, ok := executed[id]
+		if !ok {
+			continue // no result: the call never ran, so it claims nothing
 		}
+		pc.claim.CompletedAt = at
+		claims = append(claims, pc)
 	}
 	sort.Slice(claims, func(i, j int) bool { return claims[i].order < claims[j].order })
 	for _, pc := range claims {
-		res.Claims = append(res.Claims, pc.claim)
+		res.Claims = append(res.Claims, corroborate.ExpandShellClaim(pc.claim)...)
 	}
 
 	res.Sessions = g.sessions(windows, locator)
@@ -134,7 +142,7 @@ func (g *Ingester) Ingest(r io.Reader, locator string) (Result, error) {
 
 // ingestLine folds one JSONL line into the accumulators; false means the
 // line didn't parse.
-func (g *Ingester) ingestLine(line []byte, locator string, pending *map[string]pendingClaim, executed map[string]bool, windows map[string][2]time.Time, order *int) bool {
+func (g *Ingester) ingestLine(line []byte, locator string, pending *map[string]pendingClaim, executed map[string]time.Time, windows map[string][2]time.Time, order *int) bool {
 	var e entry
 	if err := json.Unmarshal(line, &e); err != nil {
 		return false
@@ -190,7 +198,9 @@ func (g *Ingester) ingestLine(line []byte, locator string, pending *map[string]p
 	case "user":
 		for _, b := range e.blocks() {
 			if b.Type == "tool_result" && b.ToolUseID != "" {
-				executed[b.ToolUseID] = true
+				if _, seen := executed[b.ToolUseID]; !seen {
+					executed[b.ToolUseID] = e.time()
+				}
 			}
 		}
 	}

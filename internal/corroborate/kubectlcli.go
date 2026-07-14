@@ -17,7 +17,7 @@ import "strings"
 //     exotic resource fails closed rather than guessing a pluralization.
 func KubectlRecordOps(command string) []string {
 	var ops []string
-	for _, seg := range shellSegments(command) {
+	for _, seg := range shellCommands(command) {
 		ops = append(ops, kubectlInvocation(seg)...)
 	}
 	return ops
@@ -45,6 +45,23 @@ var kubectlVerbOps = map[string][]string{
 	"annotate": {"patch"},
 	// scale acts on the scale subresource; the suffix is added below.
 	"scale": {"patch", "update"},
+}
+
+// kubectlRolloutOps maps `kubectl rollout <sub>` to the audit verbs it
+// produces. Every mutating subcommand is a patch on the workload — a
+// restart writes a `kubectl.kubernetes.io/restartedAt` annotation into the
+// pod template, an undo rewrites the template, pause/resume flip a field —
+// so the audit log shows `patch deployments/x`, never a "restart" verb.
+// This is how an agent restarts a workload in practice, and reading it is
+// what turns three production restarts from unclaimed records into
+// corroborated claims.
+var kubectlRolloutOps = map[string][]string{
+	"restart": {"patch"},
+	"undo":    {"patch", "update"},
+	"pause":   {"patch"},
+	"resume":  {"patch"},
+	"status":  {"get", "list"}, // watches the object; no mutation
+	"history": {"get", "list"},
 }
 
 // kubectlPodVerbs act on a pod subresource; the "resource" argument on
@@ -92,7 +109,7 @@ func kubectlInvocation(tokens []string) []string {
 	for i < len(tokens) && (isEnvAssign(tokens[i]) || commandWrappers[tokens[i]]) {
 		i++
 	}
-	if i >= len(tokens) || tokens[i] != "kubectl" {
+	if i >= len(tokens) || !isCommand(tokens[i], "kubectl") {
 		return nil
 	}
 	i++
@@ -111,7 +128,7 @@ func kubectlInvocation(tokens []string) []string {
 			continue
 		}
 		bare = append(bare, t)
-		if len(bare) == 2 {
+		if len(bare) == 3 { // `rollout restart ds/alloy` is the longest form read here
 			break
 		}
 	}
@@ -123,13 +140,24 @@ func kubectlInvocation(tokens []string) []string {
 	if op, ok := kubectlPodVerbs[verb]; ok {
 		return []string{op}
 	}
+
+	// `rollout` puts its subcommand where every other verb puts the
+	// resource, so the resource is one token further along.
+	resAt := 1
 	auditVerbs, ok := kubectlVerbOps[verb]
-	if !ok || len(bare) < 2 {
+	if verb == "rollout" {
+		if len(bare) < 3 {
+			return nil
+		}
+		auditVerbs, ok = kubectlRolloutOps[bare[1]]
+		resAt = 2
+	}
+	if !ok || len(bare) <= resAt {
 		return nil
 	}
 
 	// Resource token forms: TYPE, TYPE/NAME, TYPE.APIGROUP.
-	res := bare[1]
+	res := bare[resAt]
 	if j := strings.IndexByte(res, '/'); j >= 0 {
 		res = res[:j]
 	}

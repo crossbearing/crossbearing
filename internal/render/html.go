@@ -153,12 +153,28 @@ func BuildViewWith(rep *corroborate.Report, meta Meta, suspect SuspectFunc) View
 		sort.SliceStable(fs, func(i, j int) bool { return findingAt(fs[i]).Before(findingAt(fs[j])) })
 	}
 
+	// "clean" is the only headline that ATTESTS anything — that every action
+	// traces to a named human and every claim matches the record — so it must be
+	// earned on both counts. It used to be reached on the absence of findings
+	// alone, and the absence of Unattributed findings is not attribution: that
+	// escalation needs --production-match to fire at all, and a session with no
+	// bound operator produces none. A run without the flag, or a Bedrock session
+	// with no declared operator, therefore rendered "your cloud's own record
+	// binds each action to a person" over a report where nothing bound anything
+	// — an attestation no record supports, in the one place a reader is least
+	// likely to question it. The `attributed` count was already computed here
+	// and simply never consulted.
+	//
+	// "unbound" is the honest fourth state: nothing diverges, and nothing names
+	// who acted.
 	mode := "clean"
 	switch {
 	case unattributed > 0:
 		mode = "unattributed"
 	case divergent > 0:
 		mode = "divergent"
+	case len(rep.Sessions) > 0 && attributed < len(rep.Sessions):
+		mode = "unbound"
 	}
 
 	v := View{

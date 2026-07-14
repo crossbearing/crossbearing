@@ -200,3 +200,122 @@ func TestSessionNameFromARN(t *testing.T) {
 		}
 	}
 }
+
+// Amazon Managed Grafana proxies the Grafana HTTP API through CloudTrail
+// and puts that API's status code in errorCode — so a successful dashboard
+// write is recorded as errorCode "200". Refusing on emptiness discarded 228
+// successful mutations on the dev-eks corpus, including a dashboard an agent
+// deleted with a service-account token it had lifted from a Kubernetes
+// secret. The engine read a stream carrying 228 successful writes and
+// reported nothing had happened.
+//
+// Dropping a real record is the worst error available to this engine: an
+// over-report can be argued down, but a silently discarded action is a
+// divergence the report affirmatively denies.
+func TestFailed(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		errorCode string
+		want      bool
+	}{
+		{"no error code: the ordinary AWS success", "", false},
+		{"HTTP 200 in errorCode is a SUCCESS (Amazon Managed Grafana)", "200", false},
+		{"HTTP 201 created", "201", false},
+		{"HTTP 204 no content", "204", false},
+		// The rule is the one k8s and gcp already use: refuse what NAMES a
+		// failure, not everything outside 2xx. Refusing a real record is the
+		// worst mistake available here — the report then affirmatively denies a
+		// divergence that happened.
+		{"gRPC 0 is OK, not a failure", "0", false},
+		{"HTTP 304 is a successful conditional read", "304", false},
+		{"HTTP 302 redirect is not a failure", "302", false},
+		{"HTTP 400 genuinely failed", "400", true},
+		{"HTTP 403 genuinely failed", "403", true},
+		{"HTTP 500 genuinely failed", "500", true},
+		{"AWS error strings stay errors", "AccessDenied", true},
+		{"throttling is an attempt, not an action", "ThrottlingException", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := Extracted{ErrorCode: tt.errorCode}
+			if got := e.Failed(); got != tt.want {
+				t.Errorf("Failed() with errorCode %q = %v, want %v", tt.errorCode, got, tt.want)
+			}
+		})
+	}
+}
+
+// Federated identities carry no ARN. Amazon Managed Grafana records Grafana
+// API calls as {"type":"SAMLUser","userName":"terraform"} — the service
+// account holding the token. An empty Principal makes the record
+// unattributable and unsearchable; a bare "terraform" would read as a person
+// and invite the fabricated attribution this engine exists to prevent.
+func TestExtract_FederatedPrincipalHasNoARN(t *testing.T) {
+	t.Parallel()
+	const raw = `{"eventID":"e1","eventTime":"2026-07-13T05:13:23Z","eventSource":"grafana.amazonaws.com",
+	  "eventName":"delete","awsRegion":"us-west-2","errorCode":"200","readOnly":false,
+	  "userAgent":"curl/8.7.1","sourceIPAddress":"162.197.3.60",
+	  "userIdentity":{"type":"SAMLUser","userName":"terraform"}}`
+
+	ex, err := ExtractRaw([]byte(raw))
+	if err != nil {
+		t.Fatalf("ExtractRaw() error = %v", err)
+	}
+	if ex.Failed() {
+		t.Error("a Grafana call with errorCode 200 was refused as failed — it succeeded")
+	}
+	if want := "SAMLUser/terraform"; ex.Principal != want {
+		t.Errorf("Principal = %q, want %q — type-qualified, so it can never be mistaken for an AWS principal or a human", ex.Principal, want)
+	}
+	if want := "grafana:delete"; ex.Operation() != want {
+		t.Errorf("Operation = %q, want %q", ex.Operation(), want)
+	}
+	// It binds to nobody: no ARN means no role session, so no human.
+	if ex.SessionName() != "" || ex.SourceIdentity != "" {
+		t.Errorf("a federated identity must not produce a session binding: session=%q sourceIdentity=%q", ex.SessionName(), ex.SourceIdentity)
+	}
+}
+
+// CloudTrail attaches no resources[] to S3 bucket-level mutations — the bucket
+// lives in requestParameters. Left unread, a production DeleteBucket arrives with
+// no target, so --production-match cannot flag it and it under-escalates to
+// UnclaimedRecord instead of the Unattributed headline. The ingester now falls
+// back to requestParameters for the well-known resource fields.
+func TestExtract_TargetsFromRequestParameters(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, raw, wantTarget string
+	}{
+		{"s3 bucket delete", `{"eventID":"e","eventTime":"2026-07-13T05:00:00Z","eventSource":"s3.amazonaws.com","eventName":"DeleteBucket","userIdentity":{"arn":"arn:aws:iam::1:user/x"},"requestParameters":{"bucketName":"prod-payments"}}`, "prod-payments"},
+		{"lambda function", `{"eventID":"e","eventTime":"2026-07-13T05:00:00Z","eventSource":"lambda.amazonaws.com","eventName":"DeleteFunction20150331","userIdentity":{"arn":"arn:aws:iam::1:user/x"},"requestParameters":{"functionName":"prod-processor"}}`, "prod-processor"},
+		{"iam role", `{"eventID":"e","eventTime":"2026-07-13T05:00:00Z","eventSource":"iam.amazonaws.com","eventName":"DeleteRole","userIdentity":{"arn":"arn:aws:iam::1:user/x"},"requestParameters":{"roleName":"prod-admin"}}`, "prod-admin"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ex, err := ExtractRaw([]byte(tt.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(ex.Targets) != 1 || ex.Targets[0] != tt.wantTarget {
+				t.Errorf("Targets = %v, want [%s]", ex.Targets, tt.wantTarget)
+			}
+		})
+	}
+}
+
+// resources[] wins when present — requestParameters is only the fallback, so an
+// event that already names its resource ARN is not double-targeted.
+func TestExtract_ResourcesWinOverRequestParameters(t *testing.T) {
+	t.Parallel()
+	const raw = `{"eventID":"e","eventTime":"2026-07-13T05:00:00Z","eventSource":"s3.amazonaws.com","eventName":"PutBucketPolicy","userIdentity":{"arn":"arn:aws:iam::1:user/x"},"resources":[{"ARN":"arn:aws:s3:::prod-x"}],"requestParameters":{"bucketName":"prod-x"}}`
+	ex, err := ExtractRaw([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ex.Targets) != 1 || ex.Targets[0] != "arn:aws:s3:::prod-x" {
+		t.Errorf("Targets = %v, want just the resources[] ARN", ex.Targets)
+	}
+}

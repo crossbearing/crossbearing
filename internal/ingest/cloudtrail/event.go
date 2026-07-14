@@ -20,6 +20,7 @@ package cloudtrail
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,10 +38,13 @@ type Extracted struct {
 	ReadOnly    bool
 	UserAgent   string
 
-	// ErrorCode is non-empty when the call failed (AccessDenied,
-	// ThrottlingException, ...). A failed call is an attempt, not a record
-	// of the action happening — the ingester refuses errored events the
-	// same way k8s refuses code>=400 and gcp refuses status.code!=0.
+	// ErrorCode is CloudTrail's failure slot: normally an AWS error string
+	// (AccessDenied, ThrottlingException, ...). A failed call is an attempt,
+	// not a record of the action happening — the ingester refuses errored
+	// events the same way k8s refuses code>=400 and gcp refuses
+	// status.code!=0. Use Failed(), never emptiness: some services put an
+	// HTTP *status* here, and "200" in a field named errorCode means the
+	// call succeeded.
 	ErrorCode string
 
 	// Principal is the acting identity ARN (userIdentity.arn). For
@@ -87,6 +91,122 @@ func (e *Extracted) Operation() string {
 	return svc + ":" + e.EventName
 }
 
+// principal names the acting identity. Normally that is userIdentity.arn,
+// and for AWS's own APIs it always is.
+//
+// Federated identities carry no ARN. Amazon Managed Grafana records its
+// Grafana API calls as {"type":"SAMLUser","userName":"terraform"} — the
+// Grafana service account holding the token, with no ARN, no principalId
+// and no accessKeyId. Left empty, the Principal makes the record
+// unattributable and unsearchable: the report cannot say who acted, and
+// --principal cannot select it.
+//
+// The type prefix is deliberate and is not decoration. A bare "terraform"
+// would read as a person or a role and invite exactly the fabricated
+// attribution this engine exists to prevent; "SAMLUser/terraform" says
+// plainly that this is a federated identity in some other system's namespace
+// — a name we are relaying, not an AWS principal we resolved. Nothing binds
+// it to a human, and nothing here pretends to.
+func principal(arn, typ, userName, principalID string) string {
+	if arn != "" {
+		return arn
+	}
+	name := userName
+	if name == "" {
+		name = principalID
+	}
+	if name == "" {
+		return ""
+	}
+	if typ == "" {
+		return name
+	}
+	return typ + "/" + name
+}
+
+// Failed reports whether this event records an attempt rather than an
+// action. Emptiness of ErrorCode is NOT the test.
+//
+// CloudTrail's errorCode is documented as the AWS error the request
+// returned, and for AWS's own APIs it is: AccessDenied, ThrottlingException.
+// But services that proxy a foreign HTTP API through CloudTrail put that
+// API's *status code* in the field instead. Amazon Managed Grafana does
+// exactly this — every Grafana HTTP API call it records carries
+// errorCode "200", "500", and so on. Refusing on emptiness therefore
+// refuses the successes along with the failures: on the dev-eks corpus it
+// discarded 228 successful Grafana mutations (208 dashboard updates, 19
+// creates, and the one delete an agent made with a stolen service-account
+// token) while keeping nothing but the 8 calls that happened to omit the
+// field. The engine read a stream carrying 228 successful writes and
+// reported that nothing had happened.
+//
+// Refusing a real action is the most dangerous mistake this engine can
+// make: an unattributed finding over-reports and can be argued down, but a
+// silently dropped record is a divergence the report affirmatively denies.
+// So the test is whether the code names a failure — and a 2xx status, in
+// whatever field a service chose to put it, does not.
+func (e *Extracted) Failed() bool {
+	if e.ErrorCode == "" {
+		return false
+	}
+	if n, err := strconv.Atoi(e.ErrorCode); err == nil {
+		// A numeric code is a foreign API's status, and the rule is the one the
+		// other ingesters already use: k8s refuses code >= 400, gcp refuses a
+		// non-zero gRPC status. Refuse what NAMES a failure, rather than
+		// everything outside 2xx — "0" is gRPC's OK, and a 304 is a successful
+		// conditional read. Dropping either would be the very mistake this
+		// function exists to undo: a real record discarded at ingestion is a
+		// divergence the report then affirmatively denies.
+		return n >= 400
+	}
+	return true // a non-numeric code is an AWS error string: AccessDenied, ...
+}
+
+// resourceParamKeys are the requestParameters fields that name a resource across
+// the AWS services whose mutations most need production classification. The list
+// is curated, not exhaustive — a miss under-escalates (safe: the record still
+// surfaces as UnclaimedRecord), never over-consumes — and grows from observed
+// logs, the same empirical way the CLI translators do.
+var resourceParamKeys = []string{
+	"bucketName", "key",
+	"functionName",
+	"roleName", "userName", "groupName", "policyName", "policyArn",
+	"tableName",
+	"secretId",
+	"keyId",
+	"topicArn", "queueUrl", "queueName",
+	"streamName",
+	"dBInstanceIdentifier", "dBClusterIdentifier",
+	"clusterName", "clusterArn",
+	"repositoryName",
+	"stackName", "stackId",
+	"logGroupName",
+	"parameterName",
+}
+
+// requestParamTargets pulls resource identifiers out of a raw requestParameters
+// object. Only top-level string values under known keys are taken; anything else
+// (nested shapes, numbers, arrays) is ignored, so an odd event contributes no
+// target rather than a wrong one.
+func requestParamTargets(raw json.RawMessage) []string {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil {
+		return nil
+	}
+	var targets []string
+	for _, k := range resourceParamKeys {
+		v, ok := m[k]
+		if !ok {
+			continue
+		}
+		var str string
+		if json.Unmarshal(v, &str) == nil && str != "" {
+			targets = append(targets, str)
+		}
+	}
+	return targets
+}
+
 // SessionName returns the role session name embedded in an assumed-role
 // principal ARN, or "" when the principal is not an assumed-role session.
 func (e *Extracted) SessionName() string {
@@ -115,6 +235,7 @@ type rawEvent struct {
 	UserIdentity struct {
 		Type           string `json:"type"`
 		ARN            string `json:"arn"`
+		UserName       string `json:"userName"`
 		PrincipalID    string `json:"principalId"`
 		AccessKeyID    string `json:"accessKeyId"`
 		SessionContext struct {
@@ -162,7 +283,7 @@ func ExtractRaw(raw []byte) (Extracted, error) {
 		ReadOnly:       ev.ReadOnly,
 		UserAgent:      ev.UserAgent,
 		ErrorCode:      ev.ErrorCode,
-		Principal:      ev.UserIdentity.ARN,
+		Principal:      principal(ev.UserIdentity.ARN, ev.UserIdentity.Type, ev.UserIdentity.UserName, ev.UserIdentity.PrincipalID),
 		PrincipalType:  ev.UserIdentity.Type,
 		AccessKeyID:    ev.UserIdentity.AccessKeyID,
 		SourceIdentity: ev.UserIdentity.SessionContext.SourceIdentity,
@@ -171,6 +292,18 @@ func ExtractRaw(raw []byte) (Extracted, error) {
 		if r.ARN != "" {
 			out.Targets = append(out.Targets, r.ARN)
 		}
+	}
+	// CloudTrail does not attach a resources[] array to every management event —
+	// notably S3 bucket-level mutations (DeleteBucket, PutBucketPolicy,
+	// CreateBucket) carry the bucket only in requestParameters. Left unread, such
+	// an event arrives with no target, so --production-match cannot flag it and it
+	// under-escalates to UnclaimedRecord instead of Unattributed, dropping a real
+	// production action below the report's headline count. When resources[] gave
+	// nothing, pull the well-known resource-identifier fields out of
+	// requestParameters so the target set — and the production classification that
+	// rides on it — is not blind to the operations most worth escalating.
+	if len(out.Targets) == 0 && len(ev.RequestParameters) > 0 {
+		out.Targets = requestParamTargets(ev.RequestParameters)
 	}
 
 	if out.IsAssumeRole() {

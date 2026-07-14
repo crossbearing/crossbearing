@@ -10,4 +10,5 @@ go run ./cmd/crossbearing report \
   --aws-cloudtrail    demo/aws-cloudtrail.json \
   --k8s-audit         demo/k8s-audit.jsonl     --k8s-cluster prod-east \
   --github-audit      demo/github-audit.jsonl  --github-org  acme \
+  --principal         deploy-bot,agent-deployer \
   --production-match  prod-

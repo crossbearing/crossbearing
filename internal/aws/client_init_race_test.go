@@ -29,7 +29,7 @@ func TestClientInit_ConcurrentServiceAccess(t *testing.T) {
 			defer wg.Done()
 			switch idx % 5 {
 			case 0:
-				results <- client.S3()
+				results <- client.CloudTrail()
 			case 1:
 				results <- client.IAM()
 			case 2:
@@ -68,7 +68,7 @@ func TestClientInit_ConcurrentSameService(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func() {
 			defer wg.Done()
-			results <- client.S3()
+			results <- client.CloudTrail()
 		}()
 	}
 
@@ -96,7 +96,7 @@ func TestClientInit_ConcurrentCloseAndAccess(t *testing.T) {
 	}
 
 	// Pre-initialize some services
-	client.S3()
+	client.CloudTrail()
 	client.IAM()
 
 	var wg sync.WaitGroup
@@ -128,7 +128,7 @@ func TestClientInit_DoubleClose(t *testing.T) {
 		t.Fatal("NewClientForTesting returned nil")
 	}
 
-	client.S3()
+	client.CloudTrail()
 	client.IAM()
 
 	client.Close()
@@ -151,8 +151,8 @@ func TestClientInit_AllServiceAccessors(t *testing.T) {
 	}
 
 	// Test all service accessors return non-nil
-	if client.S3() == nil {
-		t.Error("S3() returned nil")
+	if client.CloudTrail() == nil {
+		t.Error("CloudTrail() returned nil")
 	}
 	if client.IAM() == nil {
 		t.Error("IAM() returned nil")

@@ -141,7 +141,7 @@ func TestDeriveOperationMap(t *testing.T) {
 	if len(m) != 1 {
 		t.Fatalf("map size = %d, want 1 (only the aws CLI claim derives)", len(m))
 	}
-	got := m["Bash(aws sts get-caller-identity --profile stxkxs)"]
+	got := m["aws sts get-caller-identity --profile stxkxs"]
 	if want := []string{"sts:GetCallerIdentity"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("entry = %v, want %v (deduped)", got, want)
 	}
@@ -159,7 +159,7 @@ func TestDeriveOperationMap_FeedsJoin(t *testing.T) {
 	}}
 	records := []Record{{
 		ID: "evt-1", Source: SourceCloudTrail,
-		Operation: "sts:GetCallerIdentity", RecordedAt: t0.Add(2 * minute),
+		Operation: "sts:GetCallerIdentity", ReadOnly: true, RecordedAt: t0.Add(2 * minute),
 	}}
 	sessions := []Session{{ID: "s1", StartedAt: t0.Add(-minute), EndedAt: t0.Add(5 * minute)}}
 

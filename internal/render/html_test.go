@@ -251,3 +251,149 @@ func TestHelpers(t *testing.T) {
 		t.Errorf("plural(1) = %q", got)
 	}
 }
+
+// The report must never be readable as a verdict on whether an action was
+// allowed. It answers who acted and whether they said so; both questions are
+// settled by records, and neither is a judgment. Whether the action should
+// have happened is the customer's call, and this engine does not make it.
+//
+// The trap is the clean case. An agent can be fully attributed, faithful in
+// every claim, and have read every secret in the cluster on its way out — and
+// the report will show nothing but corroboration. If the artifact implies that
+// means "fine", the engine has asserted something no record supports, in the
+// one place a reader is least likely to question it.
+//
+// So the scope statement is not a footnote or a legal hedge: it is load-bearing,
+// and it renders under EVERY headline. This test exists to make its removal a
+// deliberate act.
+func TestHTML_ScopeStatementRendersInEveryMode(t *testing.T) {
+	corroborated := corroborate.Finding{Kind: corroborate.Corroborated, Why: "ok",
+		Claim:  &corroborate.Claim{Operation: "Bash(kubectl get secret grafana-creds)", ClaimedAt: at("2026-06-11T10:00:00Z")},
+		Record: &corroborate.Record{Operation: "k8s-audit:get:secrets", ID: "x", RecordedAt: at("2026-06-11T10:00:02Z")}}
+
+	modes := map[string][]corroborate.Finding{
+		// The dangerous one: a totally honest agent, nothing to report.
+		"clean":        {corroborated},
+		"divergent":    {corroborated, {Kind: corroborate.Mismatch, Why: "d", Claim: &corroborate.Claim{Operation: "Bash(aws s3 ls)", ClaimedAt: at("2026-06-11T10:00:00Z")}, Record: &corroborate.Record{Operation: "s3:DeleteBucket", ID: "y", RecordedAt: at("2026-06-11T10:00:02Z")}}},
+		"unattributed": {corroborated, {Kind: corroborate.Unattributed, Why: "u", Record: &corroborate.Record{Operation: "s3:DeleteBucket", ID: "z", ProductionTouching: true, RecordedAt: at("2026-06-11T10:00:02Z")}}},
+	}
+	for wantMode, findings := range modes {
+		t.Run(wantMode, func(t *testing.T) {
+			rep := &corroborate.Report{
+				From: at("2026-06-11T09:30:00Z"), To: at("2026-06-11T10:30:00Z"),
+				Sessions: []corroborate.Session{{ID: "s", Agent: "claude-code", Human: "alice@acme.com"}},
+				Findings: findings,
+			}
+			v := BuildView(rep, Meta{GeneratedAt: at("2026-06-12T09:00:00Z")})
+			if v.Mode != wantMode {
+				t.Fatalf("Mode = %q, want %q", v.Mode, wantMode)
+			}
+			var buf bytes.Buffer
+			if err := HTML(&buf, v); err != nil {
+				t.Fatal(err)
+			}
+			got := buf.String()
+			if !strings.Contains(got, "does not answer whether what they did was permitted") {
+				t.Errorf("%s report does not disclaim the judgment it cannot make", wantMode)
+			}
+			if !strings.Contains(got, "that judgment is yours") {
+				t.Errorf("%s report does not leave the judgment with the customer", wantMode)
+			}
+		})
+	}
+}
+
+// The clean headline may state what the records show, and nothing beyond it.
+// It previously closed with "That is the answer an auditor wants" — an
+// editorial verdict on a report that had examined honesty and attribution and
+// nothing else.
+func TestHTML_CleanHeadlineClaimsNoVerdict(t *testing.T) {
+	rep := &corroborate.Report{
+		From: at("2026-06-11T09:30:00Z"), To: at("2026-06-11T10:30:00Z"),
+		Sessions: []corroborate.Session{{ID: "s", Agent: "claude-code", Human: "alice@acme.com"}},
+		Findings: []corroborate.Finding{{Kind: corroborate.Corroborated, Why: "ok",
+			Claim:  &corroborate.Claim{Operation: "Bash(aws s3 ls)", ClaimedAt: at("2026-06-11T10:00:00Z")},
+			Record: &corroborate.Record{Operation: "s3:ListBuckets", ID: "x", RecordedAt: at("2026-06-11T10:00:02Z")}}},
+	}
+	var buf bytes.Buffer
+	if err := HTML(&buf, BuildView(rep, Meta{GeneratedAt: at("2026-06-12T09:00:00Z")})); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "the answer an auditor wants") {
+		t.Error("the clean report tells the reader what its findings mean — it may only tell them what the records say")
+	}
+}
+
+// "clean" is the only headline that ATTESTS anything — that every action traces
+// to a named human and every claim matches the record. It used to be reached on
+// the ABSENCE of findings alone, and absence of Unattributed findings is not
+// attribution: that escalation needs --production-match to fire at all, and a
+// session with no bound operator produces none.
+//
+// So a run without the flag, or a Bedrock session with no declared operator,
+// rendered "your cloud's own record binds each action to a person" over a report
+// where nothing bound anything. That is an attestation no record supports, in the
+// place a reader is least likely to question it — the same sin the scope
+// statement was written to stop.
+func TestHTML_CleanHeadlineMustBeEarned(t *testing.T) {
+	corroborated := corroborate.Finding{Kind: corroborate.Corroborated, Why: "ok",
+		Claim:  &corroborate.Claim{Operation: "Bash(aws s3 ls)", ClaimedAt: at("2026-06-11T10:00:00Z")},
+		Record: &corroborate.Record{Operation: "s3:ListBuckets", ID: "x", RecordedAt: at("2026-06-11T10:00:02Z")}}
+
+	// Nothing diverges, nothing escalated — but the session is bound to nobody.
+	rep := &corroborate.Report{
+		From: at("2026-06-11T09:30:00Z"), To: at("2026-06-11T10:30:00Z"),
+		Sessions: []corroborate.Session{{ID: "s", Agent: "bedrock" /* Human: "" */}},
+		Findings: []corroborate.Finding{corroborated},
+	}
+	v := BuildView(rep, Meta{GeneratedAt: at("2026-06-12T09:00:00Z")})
+	if v.Mode == "clean" {
+		t.Fatal("an unbound session rendered the clean headline — the report would attest attribution it never established")
+	}
+	if v.Mode != "unbound" {
+		t.Fatalf("Mode = %q, want unbound", v.Mode)
+	}
+	var buf bytes.Buffer
+	if err := HTML(&buf, v); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	if strings.Contains(got, "binds each action to a person") {
+		t.Error("the report claims its records bind each action to a person; no session is bound to anyone")
+	}
+	if !strings.Contains(got, "nothing names who acted") {
+		t.Error("the unbound report does not say the one true thing about itself")
+	}
+	if !strings.Contains(got, "does not answer whether what they did was permitted") {
+		t.Error("the scope statement must render in this mode too")
+	}
+
+	// With the session actually bound, clean is earned.
+	rep.Sessions[0].Human = "alice@acme.com"
+	if m := BuildView(rep, Meta{GeneratedAt: at("2026-06-12T09:00:00Z")}).Mode; m != "clean" {
+		t.Errorf("Mode = %q, want clean once the session is bound to a human", m)
+	}
+}
+
+// The audit artifact must render completely with no network. A CDN stylesheet is
+// a beacon telling a third party when and from where an audit was opened, and a
+// document that silently degrades when the fetch fails — on an air-gapped review
+// machine, always.
+func TestHTML_MakesNoNetworkRequests(t *testing.T) {
+	rep := &corroborate.Report{
+		From: at("2026-06-11T09:30:00Z"), To: at("2026-06-11T10:30:00Z"),
+		Sessions: []corroborate.Session{{ID: "s", Agent: "claude-code", Human: "alice@acme.com"}},
+		Findings: []corroborate.Finding{{Kind: corroborate.Corroborated, Why: "ok",
+			Claim:  &corroborate.Claim{Operation: "Bash(aws s3 ls)", ClaimedAt: at("2026-06-11T10:00:00Z")},
+			Record: &corroborate.Record{Operation: "s3:ListBuckets", ID: "x", RecordedAt: at("2026-06-11T10:00:02Z")}}},
+	}
+	var buf bytes.Buffer
+	if err := HTML(&buf, BuildView(rep, Meta{GeneratedAt: at("2026-06-12T09:00:00Z")})); err != nil {
+		t.Fatal(err)
+	}
+	for _, beacon := range []string{"http://", "https://", "//fonts.", "@import"} {
+		if strings.Contains(buf.String(), beacon) {
+			t.Errorf("the audit artifact reaches the network (%q); it must render offline and beacon nobody", beacon)
+		}
+	}
+}

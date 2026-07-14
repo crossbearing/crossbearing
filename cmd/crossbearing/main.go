@@ -93,7 +93,7 @@ func runReport(args []string) error {
 	fs.StringVar(&p.bedrockSession, "bedrock-session-key", "", "requestMetadata key that carries the agent session id in the Bedrock log (default: group by calling role ARN)")
 	fs.StringVar(&p.region, "region", os.Getenv("AWS_REGION"), "AWS region to read CloudTrail in")
 	fs.StringVar(&p.operator, "operator", "", "declared human operator for the session (self-reported)")
-	fs.StringVar(&p.principal, "principal", "", "substring filter: only join records whose acting principal contains this")
+	fs.StringVar(&p.principal, "principal", "", "comma-separated substrings naming the agent's principal(s) across streams: filters records to it AND authorizes corroborating its production actions (operator-asserted; without it, unbound production records stay Unattributed)")
 	fs.StringVar(&p.agentSessionPat, "agent-session-pattern", "", "substring of the assumed-role session name to treat as the agent's; promotes matching unattributed records into the agent-suspect tier of the report (operator-asserted; proven-credential matches need no flag)")
 	fs.DurationVar(&p.pad, "pad", 30*time.Minute, "how far beyond the session window to ingest records")
 	fs.StringVar(&p.tagKeys, "tag-keys", "operator,human,owner", "comma-separated session-tag keys that may carry a human binding")
@@ -109,7 +109,7 @@ func runReport(args []string) error {
 	fs.StringVar(&p.azureAudit, "azure-audit", "", "Azure Activity Log file (az monitor activity-log list -o json) to join as a record stream")
 	fs.StringVar(&p.azureSub, "azure-subscription", "", "Azure subscription the activity log belongs to (anchors provenance locators)")
 	fs.StringVar(&p.cloudtrailFile, "aws-cloudtrail", "", "captured CloudTrail events (JSON array of event objects); replaces the live API — runs offline, no AWS creds")
-	fs.StringVar(&p.productionMatch, "production-match", "", "substring marking a record target as production-touching; an unclaimed production action with no human binding escalates to Unattributed")
+	fs.StringVar(&p.productionMatch, "production-match", "", "comma-separated substrings marking a record target as production-touching; an unclaimed production action with no human binding escalates to Unattributed")
 	fs.StringVar(&p.format, "format", "text", "output format: text (the operator report) or html (the print-to-PDF Agent Attribution Audit)")
 	fs.StringVar(&p.preparedFor, "prepared-for", "", "organization name on the report cover (html only)")
 	fs.StringVar(&p.color, "color", "auto", "colorize the text report: auto (only when stdout is a terminal) / always / never; NO_COLOR is honored")
@@ -198,13 +198,25 @@ func runReportPipeline(ctx context.Context, client *aws.Client, p reportParams, 
 		to = now
 	}
 
-	// A target is production-touching when it matches --production-match;
-	// the same scope applies to every stream so an unclaimed production
+	// A target is production-touching when it matches any --production-match
+	// term; the same scope applies to every stream so an unclaimed production
 	// action with no human binding escalates to Unattributed.
+	//
+	// A list, not one substring: production is rarely a single prefix. On a
+	// cluster it is a set of namespaces (argocd, monitoring, kube-system) and
+	// in an account a set of ARN fragments, and an operator who can only name
+	// one of them silently under-scopes the report — which reads as a clean
+	// cluster rather than an unmeasured one.
 	var isProd func(string) bool
-	if p.productionMatch != "" {
-		m := p.productionMatch
-		isProd = func(target string) bool { return strings.Contains(target, m) }
+	if terms := splitTerms(p.productionMatch); len(terms) > 0 {
+		isProd = func(target string) bool {
+			for _, m := range terms {
+				if strings.Contains(target, m) {
+					return true
+				}
+			}
+			return false
+		}
 	}
 
 	var ctAPI cloudtrail.EventsAPI
@@ -267,29 +279,38 @@ func runReportPipeline(ctx context.Context, client *aws.Client, p reportParams, 
 		recordSide.Sessions = append(recordSide.Sessions, az.Sessions...)
 	}
 
-	// Scope the join. Records: only the principal the agent's credentials
-	// acted as (session→principal correlation is internal/attribute's job;
-	// until then the operator names it). Claims: only those whose derived
-	// vocabulary can produce CloudTrail records at all — a Write to a local
-	// file is not corroborable by this record stream, so its absence there
-	// is not a divergence.
+	// Claims are scoped (below) to those whose derived vocabulary can produce a
+	// record at all — a Write to a local file is not corroborable by any record
+	// stream, so its absence is not a divergence.
+	//
+	// Every in-window record enters the join. --principal AUTHORIZES corroborating
+	// the agent's own production actions (below); it does NOT filter records out.
+	// Filtering by the agent's principal would delete the very records a pivot is
+	// made of — a grafana:delete under SAMLUser/terraform that the agent caused
+	// with a token lifted from a Kubernetes secret is not the agent's principal,
+	// and dropping it erases the finding the k8s bearing exists to surface. Out-of-
+	// window and non-agent-fingerprint records are already excluded in the join.
 	records := recordSide.Records
-	if p.principal != "" {
-		records = records[:0:0]
-		for _, r := range recordSide.Records {
-			if strings.Contains(r.Principal, p.principal) {
-				records = append(records, r)
-			}
-		}
-	}
 	policy := corroborate.DefaultMatchPolicy()
 	policy.OperationMap = corroborate.MergeOperationMaps(
 		corroborate.DeriveOperationMap(claimSide.Claims), // claim-specific, wins
 		corroborate.MCPGitHubOperationMap(),              // static attested seed
 	)
+	// --principal is the operator ASSERTING which principal is the agent's. That
+	// assertion, and only that, lets a claim corroborate a production record no
+	// human is bound to — the engine will not guess. Absent the flag, such a
+	// record stays Unattributed rather than being credited to a claim on a
+	// time-and-operation coincidence (which could be a stranger's action). Records
+	// are already filtered to this substring above; AgentRecord restates the scope
+	// so the join is correct even if that filtering ever moves.
+	if terms := splitTerms(p.principal); len(terms) > 0 {
+		policy.AgentRecord = func(r corroborate.Record) bool {
+			return containsAny(r.Principal, terms)
+		}
+	}
 	var scoped []corroborate.Claim
 	for _, c := range claimSide.Claims {
-		if len(policy.OperationMap[c.Operation]) > 0 {
+		if len(policy.OperationMap[corroborate.ClaimKey(c)]) > 0 {
 			scoped = append(scoped, c)
 		}
 	}
@@ -301,10 +322,10 @@ func runReportPipeline(ctx context.Context, client *aws.Client, p reportParams, 
 	// provably wielded, and check whether the roles involved even permit
 	// human binding.
 	recordSessions := recordSide.Sessions
-	if p.principal != "" {
+	if terms := splitTerms(p.principal); len(terms) > 0 {
 		recordSessions = recordSessions[:0:0]
 		for _, s := range recordSide.Sessions {
-			if strings.Contains(s.ID, p.principal) {
+			if containsAny(s.ID, terms) {
 				recordSessions = append(recordSessions, s)
 			}
 		}
@@ -492,8 +513,12 @@ func (c colorizer) bold(s string) string  { return c.p("1", s) }
 func (c colorizer) blue(s string) string  { return c.p("1;38;2;11;150;214", s) } // the fix — the headline gap
 func (c colorizer) red(s string) string   { return c.p("1;38;2;181;67;46", s) }  // mismatch
 func (c colorizer) amber(s string) string { return c.p("1;38;2;181;125;30", s) } // unclaimed / unrecorded
-func (c colorizer) green(s string) string { return c.p("1;38;2;58;138;94", s) }  // corroborated — the calm ones
-func (c colorizer) dim(s string) string   { return c.p("38;2;130;144;160", s) }  // detail / why
+// green marks corroborated findings — the agent's account of an action matched
+// the record. It is an honesty verdict, NOT a safety one: a corroborated action
+// can be the worst thing in the window. Green says "this one needs no chasing
+// down", never "this one was fine".
+func (c colorizer) green(s string) string { return c.p("1;38;2;58;138;94", s) }
+func (c colorizer) dim(s string) string   { return c.p("38;2;130;144;160", s) } // detail / why
 
 // kind paints a string in the finding kind's color (no-op for unknown kinds).
 func (c colorizer) kind(k corroborate.FindingKind, s string) string {
@@ -538,11 +563,11 @@ func render(w io.Writer, rep *corroborate.Report, bindings []attribute.Binding, 
 	}
 	fmt.Fprintf(w, "  claims   %d in transcript · %d record-corroborable (aws CLI vocabulary)\n",
 		rc.claimsIngested, rc.claimsScoped)
-	filter := "no principal filter"
+	scopeNote := "agent principal not asserted — unbound production stays unattributed"
 	if rc.principalFilter != "" {
-		filter = fmt.Sprintf("principal ~ %q", rc.principalFilter)
+		scopeNote = fmt.Sprintf("agent principal ~ %q", rc.principalFilter)
 	}
-	fmt.Fprintf(w, "  records  %d in window · %d joined (%s)\n\n", rc.recordsIngested, rc.recordsJoined, filter)
+	fmt.Fprintf(w, "  records  %d in window · %d joined (%s)\n\n", rc.recordsIngested, rc.recordsJoined, scopeNote)
 
 	tally := rep.Tally()
 	var parts []string
@@ -556,6 +581,14 @@ func render(w io.Writer, rep *corroborate.Report, bindings []attribute.Binding, 
 		parts = append(parts, part)
 	}
 	fmt.Fprintf(w, "  %s\n", strings.Join(parts, " · "))
+	// The tally reads like a scorecard, and a scorecard invites a verdict the
+	// evidence cannot give. Every kind above answers "who acted, and did they
+	// say so" — none answers "should they have". A corroborated action can be
+	// the worst thing in the window, and the reader must never take the green
+	// column for a clean bill of health. Say so where the numbers are, not in
+	// a footnote nobody reaches.
+	fmt.Fprintf(w, "  %s\n",
+		c.dim("who acted · did they say so. not: was it allowed — that judgment is yours."))
 	// Delivery lag is measured against wall clock, which says nothing about
 	// when a captured file was exported — the note only makes sense live.
 	if !rc.offline && time.Since(rep.To) < 15*time.Minute {
@@ -664,8 +697,17 @@ func renderFinding(w io.Writer, f corroborate.Finding, c colorizer) {
 		if f.Record.SourceIdentity != "" {
 			as = " as " + f.Record.SourceIdentity
 		}
-		fmt.Fprintf(w, "  %s  %s at %s by %s%s\n          %s\n",
-			c.dim("record"), f.Record.Operation, c.dim(f.Record.RecordedAt.UTC().Format(ts)),
+		// The target, not just the verb. "k8s-audit:get:secrets" says a
+		// secret was read; only the target says WHICH — and the difference
+		// between a ConfigMap-shaped secret and the Grafana admin token is
+		// the entire finding. A finding an auditor cannot act on, or
+		// falsify, is not evidence.
+		on := ""
+		if len(f.Record.Targets) > 0 {
+			on = " on " + truncate(strings.Join(f.Record.Targets, ", "), 70)
+		}
+		fmt.Fprintf(w, "  %s  %s%s at %s by %s%s\n          %s\n",
+			c.dim("record"), f.Record.Operation, on, c.dim(f.Record.RecordedAt.UTC().Format(ts)),
 			truncate(f.Record.Principal, 80), as, c.dim("event "+f.Record.ID))
 	}
 	fmt.Fprintf(w, "  %s     %s\n\n", c.dim("why"), c.dim(f.Why))
@@ -716,4 +758,26 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// containsAny reports whether s contains any of the substrings.
+func containsAny(s string, subs []string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitTerms parses a comma-separated flag value into its non-empty,
+// space-trimmed terms.
+func splitTerms(s string) []string {
+	var out []string
+	for _, t := range strings.Split(s, ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
