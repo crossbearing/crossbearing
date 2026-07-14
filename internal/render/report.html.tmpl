@@ -11,12 +11,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Attribution Audit — crossbearing</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
+    <!-- No webfonts, by design. This document is evidence: it is read by an
+         auditor, often long after the fact and sometimes on an air-gapped
+         machine, and it must render identically and completely with no network
+         at all. A stylesheet fetched from a CDN is a beacon that tells a third
+         party when and from where an audit was opened, and a document that
+         silently degrades when the fetch fails. The stacks below resolve
+         locally on every platform. -->
     <style>
       :root {
         --paper: #f2efe9;
@@ -26,9 +27,9 @@
         --ink-500: #3c5067;
         --ink-400: #5a6f86;
         --fix: #0b96d6;
-        --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
-        --mono: "IBM Plex Mono", ui-monospace, monospace;
-        --display: "Fraunces", Georgia, serif;
+        --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+        --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        --display: "Fraunces", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
       }
       * { margin: 0; padding: 0; box-sizing: border-box; }
       body {
@@ -189,6 +190,16 @@
       <p class="subhead">
         No production action is orphaned. Where the agent's own account disagrees with what
         your cloud logged is below. A receipt alone would miss that gap.
+      </p>
+      {{else if eq .Mode "unbound"}}
+      <h1 class="headline">
+        Nothing here diverges. And <em>nothing names who acted.</em>
+      </h1>
+      <p class="subhead">
+        Across {{.Sessions}} agent sessions, every claim your agents made is borne
+        out by the record. But no convention in your cloud binds those sessions to
+        a person — so the record can say what happened, and cannot say who did it.
+        That is the gap, and it is the one this report exists to close.
       </p>
       {{else}}
       <h1 class="headline">

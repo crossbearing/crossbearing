@@ -26,11 +26,11 @@ func TestClient_Close(t *testing.T) {
 	}
 
 	// Initialize a few service clients via lazyInit accessors
-	_ = c.S3()
+	_ = c.CloudTrail()
 	_ = c.IAM()
 	_ = c.KMS()
 
-	if c.s3Client == nil || c.iamClient == nil || c.kmsClient == nil {
+	if c.cloudTrailClient == nil || c.iamClient == nil || c.kmsClient == nil {
 		t.Fatal("service clients should be initialized after accessor calls")
 	}
 
@@ -41,7 +41,7 @@ func TestClient_Close(t *testing.T) {
 	}
 
 	// After Close, closedGuard returns true so accessors return nil.
-	if c.S3() != nil || c.IAM() != nil || c.KMS() != nil {
+	if c.IAM() != nil || c.KMS() != nil {
 		t.Fatal("service accessors should return nil after Close()")
 	}
 }
@@ -71,7 +71,6 @@ func TestClient_CloseNilsAllClients(t *testing.T) {
 	c := newTestClient()
 
 	// Initialize every service client
-	_ = c.S3()
 	_ = c.IAM()
 	_ = c.KMS()
 	_ = c.STS()
@@ -80,9 +79,6 @@ func TestClient_CloseNilsAllClients(t *testing.T) {
 	c.Close()
 
 	// After Close, all accessors should return nil
-	if c.S3() != nil {
-		t.Error("S3() not nil after Close")
-	}
 	if c.IAM() != nil {
 		t.Error("IAM() not nil after Close")
 	}
@@ -101,14 +97,14 @@ func TestClient_LazyInitInitializesOnce(t *testing.T) {
 	t.Parallel()
 	c := newTestClient()
 
-	// Call S3() multiple times — should return the same instance
-	s3a := c.S3()
-	s3b := c.S3()
+	// Call CloudTrail() multiple times — should return the same instance
+	s3a := c.CloudTrail()
+	s3b := c.CloudTrail()
 	if s3a != s3b {
-		t.Error("S3() should return the same instance on repeated calls")
+		t.Error("CloudTrail() should return the same instance on repeated calls")
 	}
 	if s3a == nil {
-		t.Error("S3() should not return nil on a live client")
+		t.Error("CloudTrail() should not return nil on a live client")
 	}
 }
 
@@ -153,7 +149,7 @@ func TestClient_ConcurrentAccessors(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			stsResults <- unsafe.Pointer(c.STS())
-			s3Results <- unsafe.Pointer(c.S3())
+			s3Results <- unsafe.Pointer(c.CloudTrail())
 		}()
 	}
 
@@ -177,7 +173,7 @@ func TestClient_ConcurrentAccessors(t *testing.T) {
 			firstS3 = ptr
 		}
 		if ptr != firstS3 {
-			t.Fatal("S3() returned different instances across goroutines")
+			t.Fatal("CloudTrail() returned different instances across goroutines")
 		}
 	}
 
@@ -213,7 +209,6 @@ func TestClient_AllServiceAccessorsReturnNonNil(t *testing.T) {
 	c := newTestClient()
 
 	accessors := map[string]any{
-		"S3":         c.S3(),
 		"IAM":        c.IAM(),
 		"KMS":        c.KMS(),
 		"STS":        c.STS(),
@@ -259,9 +254,6 @@ func TestClient_UninitializedAccessorsAfterClose(t *testing.T) {
 
 	// After Close, closedGuard returns true so all accessors return nil,
 	// regardless of whether they were initialized before Close.
-	if c.S3() != nil {
-		t.Error("S3() should return nil after Close")
-	}
 	if c.KMS() != nil {
 		t.Error("KMS() should return nil after Close")
 	}
