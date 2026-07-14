@@ -144,7 +144,18 @@ type Record struct {
 	// ProductionTouching marks records whose target set falls inside the
 	// configured production scope; these escalate finding severity.
 	ProductionTouching bool
-	Raw                Provenance
+	// ReadOnly is true ONLY for records positively known to have changed
+	// nothing — a read, list, or describe. It defaults false, so a record the
+	// ingester cannot confirm is a read counts as mutating, which is the safe
+	// default: the consumption guard lets a claim freely match a read (a read
+	// erases no divergence when mis-paired) but requires proof of ownership for
+	// a write. Keying that on ReadOnly rather than ProductionTouching matters —
+	// ProductionTouching is a best-effort substring flag that misses writes
+	// whose resource CloudTrail reports only in requestParameters (a bucket
+	// delete, a policy put), and treating those as freely consumable let a
+	// stranger's production write be corroborated away.
+	ReadOnly bool
+	Raw      Provenance
 }
 
 // Provenance says where a Claim or Record can be independently re-fetched —

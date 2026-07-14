@@ -8,6 +8,12 @@ import (
 
 var t0 = time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
 
+// alwaysAgent authorizes every record as the agent's — the test analogue of an
+// operator scoping --principal to cover the agent's principal. Corroborating a
+// WRITE requires such positive ownership (a read is free); mechanics tests that
+// exercise write records supply it so they test the matcher, not the guard.
+func alwaysAgent(Record) bool { return true }
+
 func session(id, human string) Session {
 	s := Session{
 		ID: id, Agent: "claude-code",
@@ -47,7 +53,9 @@ func TestJoin_MismatchWhenOperationsDisagree(t *testing.T) {
 	records := []Record{{ID: "r1", Source: SourceCloudTrail, Operation: "PutBucketPolicy",
 		RecordedAt: t0.Add(6 * time.Minute)}}
 
-	rep := Join(sessions, claims, records, DefaultMatchPolicy())
+	p := DefaultMatchPolicy()
+	p.AgentRecord = alwaysAgent // the write is the agent's (operator scoped)
+	rep := Join(sessions, claims, records, p)
 	if n := rep.Tally()[Mismatch]; n != 1 {
 		t.Fatalf("Mismatch = %d, want 1; findings: %+v", n, rep.Findings)
 	}
@@ -125,6 +133,7 @@ func TestJoin_OperationMapTranslatesVocabulary(t *testing.T) {
 	p.OperationMap = map[string][]string{
 		"mcp:create_pull_request": {"pull_request.create"},
 	}
+	p.AgentRecord = alwaysAgent // the write is the agent's (operator scoped)
 	sessions := []Session{session("s1", "alice")}
 	claims := []Claim{{ID: "c1", SessionID: "s1", Source: SourceAgentReceipt,
 		Operation: "mcp:create_pull_request", ClaimedAt: t0.Add(5 * time.Minute)}}
@@ -148,7 +157,9 @@ func TestJoin_PrefersOperationAgreementOverProximity(t *testing.T) {
 		{ID: "far-right", Operation: "PutObject", RecordedAt: t0.Add(15 * time.Minute)},
 	}
 
-	rep := Join(sessions, claims, records, DefaultMatchPolicy())
+	p := DefaultMatchPolicy()
+	p.AgentRecord = alwaysAgent
+	rep := Join(sessions, claims, records, p)
 	for _, f := range rep.Findings {
 		if f.Kind == Corroborated {
 			if f.Record.ID != "far-right" {
@@ -181,8 +192,8 @@ func TestJoin_SameTimestampClaimsKeepExecutionOrder(t *testing.T) {
 			ClaimedAt: at, CompletedAt: at.Add(5 * time.Minute)},
 	}
 	records := []Record{
-		{ID: "first", Operation: "k8s-audit:get:pods", RecordedAt: at.Add(1 * time.Minute)},
-		{ID: "second", Operation: "k8s-audit:get:pods", RecordedAt: at.Add(4 * time.Minute)},
+		{ID: "first", Operation: "k8s-audit:get:pods", ReadOnly: true, RecordedAt: at.Add(1 * time.Minute)},
+		{ID: "second", Operation: "k8s-audit:get:pods", ReadOnly: true, RecordedAt: at.Add(4 * time.Minute)},
 	}
 	p := MatchPolicy{Window: 20 * time.Minute, OperationMap: DeriveOperationMap(claims)}
 
@@ -225,7 +236,7 @@ func TestJoin_LongRunningScriptStillCorroborates(t *testing.T) {
 	records := []Record{{
 		ID: "rec-1", Operation: "k8s-audit:delete:deployments", RecordedAt: t0.Add(40 * time.Minute),
 	}}
-	p := MatchPolicy{Window: 20 * time.Minute, OperationMap: DeriveOperationMap(claims)}
+	p := MatchPolicy{Window: 20 * time.Minute, OperationMap: DeriveOperationMap(claims), AgentRecord: alwaysAgent}
 
 	rep := Join(sessions, claims, records, p)
 
@@ -361,7 +372,7 @@ func TestJoin_MismatchNeverStealsAnAgreeingRecord(t *testing.T) {
 	}
 	records := []Record{
 		// Nothing agrees with `reader`. It must NOT take the lister's record.
-		{ID: "ct-keys", Operation: "iam:ListAccessKeys", AccessKeyID: "K", RecordedAt: t0.Add(30 * time.Second)},
+		{ID: "ct-keys", Operation: "iam:ListAccessKeys", ReadOnly: true, AccessKeyID: "K", RecordedAt: t0.Add(30 * time.Second)},
 	}
 	p := MatchPolicy{Window: 20 * time.Minute, OperationMap: DeriveOperationMap(claims)}
 
@@ -491,4 +502,49 @@ func TestJoin_StrangerSourceIdentityIsNotTheAgent(t *testing.T) {
 			t.Errorf("the agent's own impersonation record must corroborate; corroborated=%d", n)
 		}
 	})
+}
+
+// The fourth false-corroboration path an adversarial re-check found: the guard
+// keyed its free-consume escape on ProductionTouching, a best-effort substring
+// flag the ingester cannot always set. CloudTrail reports an S3 bucket delete's
+// resource only in requestParameters, so a real production DeleteBucket arrives
+// with no target and ProductionTouching=false — reading as freely consumable
+// "non-production". A stranger's production write was then corroborated away.
+//
+// The guard now keys on ReadOnly: a read changed nothing (mis-pairing it erases
+// no divergence), a write must prove ownership regardless of whether its
+// production target was identified. A record the ingester cannot confirm is a
+// read defaults to mutating — the safe direction.
+func TestJoin_WriteWithNoTargetStillNeedsOwnership(t *testing.T) {
+	t.Parallel()
+	sessions := []Session{{ID: "agent", StartedAt: t0, EndedAt: t0.Add(time.Hour)}}
+	claims := []Claim{{ID: "phantom", SessionID: "agent",
+		Operation: "Bash(aws s3api delete-bucket --bucket prod-payments)",
+		Target:    "aws s3api delete-bucket --bucket prod-payments",
+		ClaimedAt: t0, CompletedAt: t0}}
+	// A stranger's real production DeleteBucket, as the ingester actually emits it:
+	// a WRITE (ReadOnly=false) whose bucket lived in requestParameters, so no
+	// target was extracted and ProductionTouching is false.
+	records := []Record{{ID: "stranger-del", Operation: "s3:DeleteBucket",
+		Principal: "arn:aws:iam::1:user/dana", ReadOnly: false, ProductionTouching: false,
+		RecordedAt: t0.Add(30 * time.Second)}}
+
+	rep := Join(sessions, claims, records, MatchPolicy{Window: 20 * time.Minute, OperationMap: DeriveOperationMap(claims)})
+
+	if hasCorroboratedRecord(rep, "stranger-del") {
+		t.Error("a production write with no identified target was corroborated as the agent's — ProductionTouching is not a safe positive signal")
+	}
+	// It must still surface, not vanish.
+	if rep.Tally()[UnclaimedRecord] != 1 {
+		t.Errorf("the stranger's deletion must remain an UnclaimedRecord; tally: %+v", rep.Tally())
+	}
+
+	// A READ with no target IS freely matchable — that is the escape the guard
+	// keeps, and it is safe because a read erases nothing.
+	readClaim := []Claim{{ID: "c", SessionID: "agent", Operation: "Bash(aws sts get-caller-identity)", Target: "aws sts get-caller-identity", ClaimedAt: t0, CompletedAt: t0}}
+	readRec := []Record{{ID: "r", Operation: "sts:GetCallerIdentity", ReadOnly: true, RecordedAt: t0.Add(2 * time.Second)}}
+	rr := Join(sessions, readClaim, readRec, MatchPolicy{Window: 20 * time.Minute, OperationMap: DeriveOperationMap(readClaim)})
+	if rr.Tally()[Corroborated] != 1 {
+		t.Errorf("a read must still corroborate freely; tally: %+v", rr.Tally())
+	}
 }

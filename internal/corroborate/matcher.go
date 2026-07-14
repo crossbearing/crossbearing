@@ -163,13 +163,26 @@ func Join(sessions []Session, claims []Claim, records []Record, p MatchPolicy) R
 
 		sessionHuman := humanBySession[s.ID]
 		consumable := func(r Record) bool {
-			if !r.ProductionTouching {
-				return true // low-stakes axis: a mis-paired read erases no divergence
+			if r.ReadOnly {
+				return true // a read changed nothing; mis-pairing it erases no divergence
 			}
+			// It is a write (or a record we cannot confirm is a read). It may be
+			// consumed only when proved the agent's: it names the SESSION's own
+			// human (a stranger's impersonation record names a human too, and does
+			// not count), or the operator scoped this run to the credential.
+			//
+			// This gates on ReadOnly, not ProductionTouching, on purpose.
+			// ProductionTouching is a best-effort substring flag set from a target
+			// set the ingester cannot always fill — CloudTrail reports an S3 bucket
+			// delete's resource only in requestParameters, so it arrives with no
+			// target and reads as "non-production". Trusting that flag let a
+			// stranger's production write be freely consumed and erased. A write's
+			// production-ness may be unknown; that it CHANGED SOMETHING is not, and
+			// that is the bit that decides whether erasing it can hide a divergence.
 			if r.SourceIdentity != "" {
-				return r.SourceIdentity == sessionHuman // the agent's own human, not a stranger's
+				return r.SourceIdentity == sessionHuman
 			}
-			return p.AgentRecord != nil && p.AgentRecord(r) // unattributed production: operator scope
+			return p.AgentRecord != nil && p.AgentRecord(r)
 		}
 
 		// Phase 1 — agreeing matches. AGREEMENT ONLY: a claim must not take an

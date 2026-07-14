@@ -208,6 +208,7 @@ func (g *Ingester) record(ex Extracted, raw string) corroborate.Record {
 		AccessKeyID:    ex.AccessKeyID,
 		Targets:        ex.Targets,
 		RecordedAt:     ex.EventTime,
+		ReadOnly:       ex.ReadOnly,
 		Raw: corroborate.Provenance{
 			Locator: "aws-cloudtrail:" + ex.Region + "/" + ex.EventID,
 			Digest:  corroborate.DigestHex([]byte(raw)),

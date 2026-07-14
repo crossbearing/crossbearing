@@ -168,6 +168,11 @@ func (e *event) effective() bool {
 	return e.ResponseStatus == nil || e.ResponseStatus.Code < 400
 }
 
+// k8sReadVerbs are the audit verbs that change nothing. A record with any
+// other verb is treated as mutating (the safe default), so the join will not
+// freely credit it to a claim without proof of ownership.
+var k8sReadVerbs = map[string]bool{"get": true, "list": true, "watch": true}
+
 // Ingest reads audit events from r: JSONL (log backend) or an EventList
 // (webhook backend).
 func (g *Ingester) Ingest(r io.Reader) (Result, error) {
@@ -242,6 +247,7 @@ func (g *Ingester) record(e *event, raw []byte) corroborate.Record {
 		AccessKeyID: e.accessKey(),
 		Targets:     targets,
 		RecordedAt:  e.at(),
+		ReadOnly:    k8sReadVerbs[e.Verb],
 		Raw: corroborate.Provenance{
 			Locator: "k8s-audit:" + g.opts.Cluster + "#" + e.AuditID,
 			Digest:  corroborate.DigestHex(raw),

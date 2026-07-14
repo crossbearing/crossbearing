@@ -80,6 +80,26 @@ func New(logger *slog.Logger, opts Options) *Ingester {
 }
 
 // IngestFile ingests one audit-log file.
+// gcpReadMethod reports whether a Cloud Audit methodName only reads. GCP method
+// names are verb-suffixed (compute.instances.get, storage.objects.list,
+// ...getIamPolicy, ...testIamPermissions); anything else is treated as mutating,
+// the safe default for the consumption guard.
+func gcpReadMethod(m string) bool {
+	i := strings.LastIndexByte(m, '.')
+	verb := m
+	if i >= 0 {
+		verb = m[i+1:]
+	}
+	switch {
+	case strings.HasPrefix(verb, "get"), strings.HasPrefix(verb, "list"),
+		strings.HasPrefix(verb, "aggregatedList"), verb == "testIamPermissions",
+		strings.HasPrefix(verb, "batchGet"), strings.HasPrefix(verb, "search"),
+		strings.HasPrefix(verb, "lookup"), strings.HasPrefix(verb, "query"):
+		return true
+	}
+	return false
+}
+
 func (g *Ingester) IngestFile(path string) (Result, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -219,6 +239,7 @@ func (g *Ingester) record(e *logEntry, raw []byte) corroborate.Record {
 		Principal:  p.AuthenticationInfo.PrincipalEmail,
 		Targets:    targets,
 		RecordedAt: e.Timestamp,
+		ReadOnly:   gcpReadMethod(p.MethodName),
 		Raw: corroborate.Provenance{
 			Locator: "gcp-audit:" + project + "#" + e.InsertID,
 			Digest:  corroborate.DigestHex(raw),

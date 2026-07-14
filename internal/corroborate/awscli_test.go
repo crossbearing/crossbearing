@@ -159,7 +159,7 @@ func TestDeriveOperationMap_FeedsJoin(t *testing.T) {
 	}}
 	records := []Record{{
 		ID: "evt-1", Source: SourceCloudTrail,
-		Operation: "sts:GetCallerIdentity", RecordedAt: t0.Add(2 * minute),
+		Operation: "sts:GetCallerIdentity", ReadOnly: true, RecordedAt: t0.Add(2 * minute),
 	}}
 	sessions := []Session{{ID: "s1", StartedAt: t0.Add(-minute), EndedAt: t0.Add(5 * minute)}}
 

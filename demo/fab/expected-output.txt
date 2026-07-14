@@ -1,38 +1,35 @@
 crossbearing divergence report
   window   2026-06-26 09:30:00Z → 2026-06-26 12:00:05Z (offline (captured CloudTrail))
   session  arn:aws:sts::111122223333:assumed-role/agent-runtime/sessA
-           agent=bedrock human=UNATTRIBUTED (unattributed) active 2026-06-26 10:00:00Z → 2026-06-26 10:01:00Z
+           agent=bedrock human=alice@acme.com (declared) active 2026-06-26 10:00:00Z → 2026-06-26 10:01:00Z
   session  arn:aws:sts::111122223333:assumed-role/ci-runner/build-99
-           agent=bedrock human=UNATTRIBUTED (unattributed) active 2026-06-26 11:30:00Z → 2026-06-26 11:30:05Z
+           agent=bedrock human=alice@acme.com (declared) active 2026-06-26 11:30:00Z → 2026-06-26 11:30:05Z
   claims   4 in transcript · 4 record-corroborable (aws CLI vocabulary)
-  records  4 in window · 4 joined (agent principal not asserted — unbound production stays unattributed)
+  records  4 in window · 4 joined (agent principal ~ "agent-runtime,alice")
 
-  unattributed 1 · mismatch 1 · unclaimed-record 0 · unrecorded-claim 1 · corroborated 2
+  unattributed 0 · mismatch 1 · unclaimed-record 1 · unrecorded-claim 1 · corroborated 2
   who acted · did they say so. not: was it allowed — that judgment is yours.
 
 ATTRIBUTION
   agent session arn:aws:sts::111… ≈ credential session sessA@2026-06-26T10:00:40Z key=ASIAAGENTRT00001
-    window-overlap · human=UNATTRIBUTED (unattributed) · evidence: 0 item(s)
+    window-overlap · human=alice@acme.com (declared) · evidence: 0 item(s)
   agent session arn:aws:sts::111… ≈ credential session github:alice@2026-06-26T10:00:24Z
     window-overlap · human=alice (actor-identity) · evidence: 1 item(s)
-    gap: records name the human; the agent session declared no operator — pass --operator so the declaration can be cross-checked against the records
+    CONFLICT: claim side declared alice@acme.com but records bind alice
   agent session arn:aws:sts::111… ≈ credential session system:serviceaccount:agents:agent-runtime@2026-06-26T10:00:04Z
     window-overlap · human=alice@acme.com (k8s-impersonation) · evidence: 1 item(s)
-    gap: records name the human; the agent session declared no operator — pass --operator so the declaration can be cross-checked against the records
-  agent session arn:aws:sts::111… ≈ credential session system:serviceaccount:agents:deploy-bot@2026-06-26T10:00:58Z
-    window-overlap · human=UNATTRIBUTED (unattributed) · evidence: 0 item(s)
-
-UNATTRIBUTED (1)
-  record  s3:CreateBucket on arn:aws:s3:::payments-prod-exports at 10:00:40Z by arn:aws:sts::111122223333:assumed-role/agent-runtime/sessA
-          event ct-r3
-  why     production-touching action with agent fingerprints and no named human binding
-
 
 MISMATCH (1)
   claim   Bash(kubectl -n payments get configmaps) at 10:00:55Z
+  record  s3:CreateBucket on arn:aws:s3:::payments-prod-exports at 10:00:40Z by arn:aws:sts::111122223333:assumed-role/agent-runtime/sessA
+          event ct-r3
+  why     claimed Bash(kubectl -n payments get configmaps) but infrastructure recorded s3:CreateBucket
+
+
+UNCLAIMED-RECORD (1)
   record  k8s-audit:delete:configmaps on payments/configmaps/feature-flags at 10:00:58Z by system:serviceaccount:agents:deploy-bot
           event k8s-rdel
-  why     claimed Bash(kubectl -n payments get configmaps) but infrastructure recorded k8s-audit:delete:configmaps
+  why     infrastructure recorded this action inside an agent session window; no claim accounts for it
 
 
 UNRECORDED-CLAIM (1)
