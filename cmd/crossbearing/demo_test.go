@@ -46,6 +46,7 @@ func TestDemo_DeterministicOutput(t *testing.T) {
 		k8sCluster:      "prod-east",
 		githubAudit:     "../../demo/github-audit.jsonl",
 		githubOrg:       "acme",
+		principal:       "deploy-bot,agent-deployer",
 		productionMatch: "prod-",
 		tagKeys:         "operator,human,owner",
 		pad:             30 * time.Minute,
@@ -77,6 +78,7 @@ func TestAWSDemo_DeterministicOutput(t *testing.T) {
 	err = runReportPipeline(context.Background(), nil, reportParams{
 		transcript:      "../../demo/aws/transcript.jsonl",
 		cloudtrailFile:  "../../demo/aws/aws-cloudtrail.json",
+		principal:       "deploy-bot",
 		productionMatch: "prod-",
 		tagKeys:         "operator,human,owner",
 		pad:             30 * time.Minute,

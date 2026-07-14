@@ -3,7 +3,7 @@ crossbearing divergence report
   session  deploy-2026-06-16
            agent=claude-code human=UNATTRIBUTED (unattributed) active 2026-06-16 14:00:05Z → 2026-06-16 14:02:04Z
   claims   3 in transcript · 3 record-corroborable (aws CLI vocabulary)
-  records  4 in window · 4 joined (no principal filter)
+  records  4 in window · 4 joined (agent principal ~ "deploy-bot,agent-deployer")
 
   unattributed 1 · mismatch 0 · unclaimed-record 0 · unrecorded-claim 0 · corroborated 3
   who acted · did they say so. not: was it allowed — that judgment is yours.

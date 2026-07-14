@@ -36,8 +36,9 @@ type MatchPolicy struct {
 	// this engine can reach, and it reaches it silently.
 	//
 	// Nil means nothing was established. The join then refuses to let any claim
-	// consume a record it would otherwise have had to report as Unattributed —
-	// see canConsume. It cannot tell who acted, so it does not pretend to.
+	// consume a record it would otherwise have had to report as Unattributed (the
+	// `consumable` guard in Join). It cannot tell who acted, so it does not
+	// pretend to — the record falls to Unattributed instead.
 	AgentRecord func(Record) bool
 
 	// Now supplies the current time for sessions still believed live. Injected
@@ -102,34 +103,47 @@ func Join(sessions []Session, claims []Claim, records []Record, p MatchPolicy) R
 
 	usedRecords := make(map[string]bool)
 
-	// Pass 1, in two phases, because "who produced this record" is the question
-	// the join used to skip.
+	// Pass 1 — every claim seeks its record, subject to one rule the join used
+	// to skip: a claim may not consume a record the engine cannot show is the
+	// agent's.
 	//
 	// A claim CONSUMES the record it matches — that is what corroboration means,
 	// and a consumed record leaves the unclaimed accounting for good. So the one
-	// record a claim must never take on the strength of a time-and-operation
-	// coincidence is the record the report would otherwise have had to escalate:
-	// a production-touching action bound to no human. Take that wrongly and the
-	// finding does not land in the wrong bucket, it CEASES TO EXIST.
+	// record a claim must never take on a time-and-operation coincidence is the
+	// record the report would otherwise have had to escalate: a production action
+	// bound to no human. Consume it wrongly and the finding does not land in the
+	// wrong bucket, it CEASES TO EXIST — a stranger's production deletion reported
+	// as the agent's corroborated work, the stranger's divergence erased.
 	//
-	// But an agent's own production actions are exactly that shape, and they must
-	// still corroborate — so the credential has to be established from evidence,
-	// without circularity:
+	// An earlier attempt tried to PROVE the agent's credential inside the join,
+	// from a non-escalating corroboration. That was unsound: two actors doing
+	// `list-buckets` in one window is not proof, it is the exact coincidence the
+	// engine exists to catch, and a stranger who did both a read and a delete had
+	// the read "prove" their credential and unlock the delete. Credential proof is
+	// not the join's job — it is the operator's assertion, and it enters the same
+	// way every other judgment does: as INPUT (MatchPolicy.AgentRecord, wired from
+	// the operator's --principal scope), never as a guess the engine makes.
 	//
-	//	phase A — match only records whose loss cannot hide anything (not
-	//	          production-touching, or already naming their own human, or in a
-	//	          session with a bound operator). Every corroboration here PROVES
-	//	          a credential belongs to the agent, because the agent's own claim
-	//	          named the action it performed.
-	//	phase B — the remaining claims may now reach the protected records, but
-	//	          only those carrying a credential phase A proved — or one the
-	//	          operator positively scoped (MatchPolicy.AgentRecord).
+	// So a protected record is consumable only when the agent's ownership is
+	// POSITIVELY established: the record names its own human (SourceIdentity), or
+	// the operator scoped this run to the credential. Absent that, the record is
+	// left for pass 2, where it becomes Unattributed, and its would-be claim
+	// becomes UnrecordedClaim. Both over-report, and over-reporting is the
+	// direction this engine is allowed to be wrong in: an unattributed finding can
+	// be argued down with evidence; a vanished one cannot be argued with at all.
 	//
-	// A record from a credential neither phase established is never consumed. It
-	// falls to pass 2 as Unattributed, and its would-be claim becomes an
-	// UnrecordedClaim. Both are over-reports, and over-reporting is the direction
-	// this engine is allowed to be wrong in: an unattributed finding can be argued
-	// down with evidence; a vanished one cannot be argued with at all.
+	// consumable is NOT keyed on the session's human. A --operator-declared human
+	// (the weakest, self-reported binding) binds the AGENT's session; it says
+	// nothing about who produced an arbitrary in-window record, and letting it
+	// de-escalate a stranger's record here was a false-corroboration path of its
+	// own.
+	consumable := func(r Record) bool {
+		if !r.ProductionTouching || r.SourceIdentity != "" {
+			return true // its loss hides nothing: not production, or it names its human
+		}
+		return p.AgentRecord != nil && p.AgentRecord(r) // else: proved the agent's, or refused
+	}
+
 	matches := make(map[string]*Record, len(claims))
 	for _, s := range sessions {
 		sc := bySession[s.ID]
@@ -144,61 +158,25 @@ func Join(sessions []Session, claims []Claim, records []Record, p MatchPolicy) R
 		sort.SliceStable(sc, func(i, j int) bool { return sc[i].ClaimedAt.Before(sc[j].ClaimedAt) })
 		bySession[s.ID] = sc
 
-		human := humanBySession[s.ID]
-		proven := make(map[string]bool) // credentials proved to be this agent's
-
-		// Phase A — corroborations against records whose loss can hide nothing.
-		// AGREEMENT ONLY: a claim must not take an unrelated record here just
-		// because its own is still out of reach. Each match proves a credential
-		// is the agent's, because the agent named the very action the record
-		// shows.
-		unprotected := func(r Record) bool { return !wouldEscalate(r, human) }
+		// Phase 1 — agreeing matches. AGREEMENT ONLY: a claim must not take an
+		// unrelated record just because its own is still out of reach, or it
+		// would manufacture a Mismatch another claim would have corroborated.
 		for i := range sc {
-			rec, ok := bestRecord(sc[i], records, usedRecords, unprotected, true, p)
-			if !ok {
-				continue
-			}
-			usedRecords[rec.ID] = true
-			matches[sc[i].ID] = rec
-			proven[credentialKey(*rec)] = true
-		}
-
-		// mine: everything phase A could reach, plus the protected records now
-		// carrying a credential the agent has been proved to hold — or one the
-		// operator positively scoped.
-		mine := func(r Record) bool {
-			if !wouldEscalate(r, human) {
-				return true
-			}
-			if proven[credentialKey(r)] {
-				return true
-			}
-			return p.AgentRecord != nil && p.AgentRecord(r)
-		}
-
-		// Phase B — corroborations against the agent's OWN production actions,
-		// which are exactly the shape phase A had to protect. Still agreement
-		// only.
-		for i := range sc {
-			if matches[sc[i].ID] != nil {
-				continue
-			}
-			if rec, ok := bestRecord(sc[i], records, usedRecords, mine, true, p); ok {
+			if rec, ok := bestRecord(sc[i], records, usedRecords, consumable, true, p); ok {
 				usedRecords[rec.ID] = true
 				matches[sc[i].ID] = rec
 			}
 		}
 
-		// Phase C — a claim with no agreeing record anywhere may still correlate
-		// with a disagreeing one: that is a Mismatch, and it is a real finding
-		// (claimed a read, performed a write). It runs LAST so that no claim can
-		// manufacture a Mismatch out of a record another claim would have
-		// corroborated.
+		// Phase 2 — a claim with no agreeing record may still correlate with a
+		// disagreeing one: that is a Mismatch, a real finding (claimed a read,
+		// performed a write). It runs LAST so no claim manufactures a Mismatch
+		// out of a record another claim would have corroborated.
 		for i := range sc {
 			if matches[sc[i].ID] != nil {
 				continue
 			}
-			if rec, ok := bestRecord(sc[i], records, usedRecords, mine, false, p); ok {
+			if rec, ok := bestRecord(sc[i], records, usedRecords, consumable, false, p); ok {
 				usedRecords[rec.ID] = true
 				matches[sc[i].ID] = rec
 			}
@@ -331,30 +309,6 @@ func sessionForRecord(r Record, order []string, windows map[string][2]time.Time)
 	return "", false
 }
 
-// wouldEscalate reports whether pass 2 would have to call this record
-// Unattributed: a production-touching action that neither the record itself nor
-// its session binds to a named human. These are the findings whose silent
-// disappearance is catastrophic, and therefore the records a claim may not
-// consume on a coincidence.
-//
-// It is deliberately the SAME predicate the Unattributed escalation uses below,
-// so the set a claim may not quietly take is exactly the set the report would
-// otherwise have had to raise.
-func wouldEscalate(r Record, sessionHuman string) bool {
-	return r.ProductionTouching && sessionHuman == "" && r.SourceIdentity == ""
-}
-
-// credentialKey identifies the credential session behind a record. The access
-// key separates concurrent sessions sharing one principal (SSO caches hand the
-// same role to every terminal); principals that carry no key fall back to the
-// principal itself.
-func credentialKey(r Record) string {
-	if r.AccessKeyID != "" {
-		return string(r.Source) + "/" + r.AccessKeyID
-	}
-	return string(r.Source) + "/" + r.Principal
-}
-
 // now is the injected clock, defaulting to wall time.
 func (p MatchPolicy) now() time.Time {
 	if p.Now != nil {
@@ -388,11 +342,4 @@ func claimGap(c Claim, at time.Time) time.Duration {
 	default:
 		return 0 // inside the window the tool call was running
 	}
-}
-
-func absDuration(d time.Duration) time.Duration {
-	if d < 0 {
-		return -d
-	}
-	return d
 }

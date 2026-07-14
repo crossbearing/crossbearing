@@ -59,19 +59,19 @@ func BashOperation(cmd string) string {
 // reached. `if [ "$ENV" = staging ]; then kubectl delete deploy/api; fi` in prod
 // mints a claim for a deletion that never happened.
 //
-// This comment used to assert that the unsafe direction was "impossible", and it
-// was wrong. An over-claimed invocation is only safe if nothing can credit it
-// with somebody ELSE's record — and the matcher used to correlate on time and
-// operation alone, with no test of who produced what. A phantom claim could
-// therefore consume a human's production deletion, report it Corroborated, and
-// erase that human's unattributed action from the report entirely.
+// This comment used to assert the unsafe direction was "impossible", and it was
+// wrong: the matcher correlated on time and operation alone, so a phantom claim
+// could consume a stranger's production deletion, report it Corroborated, and
+// erase the stranger's unattributed action. A later attempt to PROVE the agent's
+// credential inside the join was also unsound — it proved credentials from
+// coincidence. Neither guarantee should have been written before it was tested.
 //
-// What makes over-claiming safe is not this function. It is
-// MatchPolicy.AgentRecord and canConsume in the matcher: a record the report
-// would otherwise escalate to Unattributed can only be consumed by a claim when
-// the agent's ownership of it is POSITIVELY established. An over-claim now falls
-// to UnrecordedClaim — an agent credited with something no record shows — which
-// is the direction this engine is allowed to be wrong in.
+// What actually makes over-claiming safe is the matcher's `consumable` guard: a
+// production record bound to no human is consumable only when its ownership is
+// POSITIVELY established — the record names its own human, or the operator scoped
+// the run to the credential (MatchPolicy.AgentRecord). An over-claim absent that
+// evidence falls to UnrecordedClaim, not Corroborated — the direction this engine
+// is allowed to be wrong in.
 //
 // Heredoc bodies and command substitutions are excluded upstream (stripHeredocs,
 // hasUnresolved): those are not over-claims but claims about text that was never

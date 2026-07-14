@@ -93,7 +93,7 @@ func runReport(args []string) error {
 	fs.StringVar(&p.bedrockSession, "bedrock-session-key", "", "requestMetadata key that carries the agent session id in the Bedrock log (default: group by calling role ARN)")
 	fs.StringVar(&p.region, "region", os.Getenv("AWS_REGION"), "AWS region to read CloudTrail in")
 	fs.StringVar(&p.operator, "operator", "", "declared human operator for the session (self-reported)")
-	fs.StringVar(&p.principal, "principal", "", "substring filter: only join records whose acting principal contains this")
+	fs.StringVar(&p.principal, "principal", "", "comma-separated substrings naming the agent's principal(s) across streams: filters records to it AND authorizes corroborating its production actions (operator-asserted; without it, unbound production records stay Unattributed)")
 	fs.StringVar(&p.agentSessionPat, "agent-session-pattern", "", "substring of the assumed-role session name to treat as the agent's; promotes matching unattributed records into the agent-suspect tier of the report (operator-asserted; proven-credential matches need no flag)")
 	fs.DurationVar(&p.pad, "pad", 30*time.Minute, "how far beyond the session window to ingest records")
 	fs.StringVar(&p.tagKeys, "tag-keys", "operator,human,owner", "comma-separated session-tag keys that may carry a human binding")
@@ -285,20 +285,31 @@ func runReportPipeline(ctx context.Context, client *aws.Client, p reportParams, 
 	// vocabulary can produce CloudTrail records at all — a Write to a local
 	// file is not corroborable by this record stream, so its absence there
 	// is not a divergence.
+	// Every in-window record enters the join. --principal AUTHORIZES corroborating
+	// the agent's own production actions (below); it does NOT filter records out.
+	// Filtering by the agent's principal would delete the very records a pivot is
+	// made of — a grafana:delete under SAMLUser/terraform that the agent caused
+	// with a token lifted from a Kubernetes secret is not the agent's principal,
+	// and dropping it erases the finding the k8s bearing exists to surface. Out-of-
+	// window and non-agent-fingerprint records are already excluded in the join.
 	records := recordSide.Records
-	if p.principal != "" {
-		records = records[:0:0]
-		for _, r := range recordSide.Records {
-			if strings.Contains(r.Principal, p.principal) {
-				records = append(records, r)
-			}
-		}
-	}
 	policy := corroborate.DefaultMatchPolicy()
 	policy.OperationMap = corroborate.MergeOperationMaps(
 		corroborate.DeriveOperationMap(claimSide.Claims), // claim-specific, wins
 		corroborate.MCPGitHubOperationMap(),              // static attested seed
 	)
+	// --principal is the operator ASSERTING which principal is the agent's. That
+	// assertion, and only that, lets a claim corroborate a production record no
+	// human is bound to — the engine will not guess. Absent the flag, such a
+	// record stays Unattributed rather than being credited to a claim on a
+	// time-and-operation coincidence (which could be a stranger's action). Records
+	// are already filtered to this substring above; AgentRecord restates the scope
+	// so the join is correct even if that filtering ever moves.
+	if terms := splitTerms(p.principal); len(terms) > 0 {
+		policy.AgentRecord = func(r corroborate.Record) bool {
+			return containsAny(r.Principal, terms)
+		}
+	}
 	var scoped []corroborate.Claim
 	for _, c := range claimSide.Claims {
 		if len(policy.OperationMap[corroborate.ClaimKey(c)]) > 0 {
@@ -313,10 +324,10 @@ func runReportPipeline(ctx context.Context, client *aws.Client, p reportParams, 
 	// provably wielded, and check whether the roles involved even permit
 	// human binding.
 	recordSessions := recordSide.Sessions
-	if p.principal != "" {
+	if terms := splitTerms(p.principal); len(terms) > 0 {
 		recordSessions = recordSessions[:0:0]
 		for _, s := range recordSide.Sessions {
-			if strings.Contains(s.ID, p.principal) {
+			if containsAny(s.ID, terms) {
 				recordSessions = append(recordSessions, s)
 			}
 		}
@@ -554,11 +565,11 @@ func render(w io.Writer, rep *corroborate.Report, bindings []attribute.Binding, 
 	}
 	fmt.Fprintf(w, "  claims   %d in transcript · %d record-corroborable (aws CLI vocabulary)\n",
 		rc.claimsIngested, rc.claimsScoped)
-	filter := "no principal filter"
+	scopeNote := "agent principal not asserted — unbound production stays unattributed"
 	if rc.principalFilter != "" {
-		filter = fmt.Sprintf("principal ~ %q", rc.principalFilter)
+		scopeNote = fmt.Sprintf("agent principal ~ %q", rc.principalFilter)
 	}
-	fmt.Fprintf(w, "  records  %d in window · %d joined (%s)\n\n", rc.recordsIngested, rc.recordsJoined, filter)
+	fmt.Fprintf(w, "  records  %d in window · %d joined (%s)\n\n", rc.recordsIngested, rc.recordsJoined, scopeNote)
 
 	tally := rep.Tally()
 	var parts []string
@@ -749,6 +760,16 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// containsAny reports whether s contains any of the substrings.
+func containsAny(s string, subs []string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // splitTerms parses a comma-separated flag value into its non-empty,

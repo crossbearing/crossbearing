@@ -5,7 +5,7 @@ crossbearing divergence report
   session  arn:aws:sts::111122223333:assumed-role/ci-runner/build-99
            agent=bedrock human=UNATTRIBUTED (unattributed) active 2026-06-26 11:30:00Z → 2026-06-26 11:30:05Z
   claims   4 in transcript · 4 record-corroborable (aws CLI vocabulary)
-  records  4 in window · 4 joined (no principal filter)
+  records  4 in window · 4 joined (agent principal not asserted — unbound production stays unattributed)
 
   unattributed 1 · mismatch 1 · unclaimed-record 0 · unrecorded-claim 1 · corroborated 2
   who acted · did they say so. not: was it allowed — that judgment is yours.

@@ -196,8 +196,8 @@ func isRedirectOperator(t string) bool {
 // claim consume a record it would otherwise have to report as Unattributed
 // unless the agent's ownership of that record is positively established
 // (MatchPolicy.AgentRecord). Without that guard an over-claim can be corroborated
-// by a stranger's record, which erases the stranger's divergence — see
-// canConsume.
+// by a stranger's record, which erases the stranger's divergence — see the
+// `consumable` guard in matcher.go.
 //
 // Text that was never a command at all is a different matter and is excluded
 // outright: heredoc bodies (stripHeredocs) and segments left holding an

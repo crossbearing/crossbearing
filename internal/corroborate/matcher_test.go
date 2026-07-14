@@ -1,6 +1,7 @@
 package corroborate
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -298,38 +299,50 @@ func TestJoin_ForeignRecordIsNeverCorroborated(t *testing.T) {
 	}
 }
 
-// The agent's OWN production actions are the same shape as a stranger's — and
-// they must still corroborate. The credential is proved without circularity: a
-// non-escalating corroboration (a read, a non-production write) shows which
-// credential the agent holds, and only then may it be credited with the actions
-// that would otherwise be unattributed.
-func TestJoin_AgentsOwnProductionActionCorroborates(t *testing.T) {
+// The agent's OWN production actions are the same shape as a stranger's, so the
+// engine will not corroborate them on a coincidence — it corroborates them when
+// the OPERATOR asserts which principal is the agent's (MatchPolicy.AgentRecord,
+// wired from --principal). That assertion is an input, like --production-match,
+// not a guess the engine makes.
+func TestJoin_AgentsOwnProductionAction(t *testing.T) {
 	t.Parallel()
 	sessions := []Session{{ID: "agent", StartedAt: t0, EndedAt: t0.Add(time.Hour)}}
-	claims := []Claim{
-		// A harmless read: proves the credential is the agent's.
-		{ID: "c1", SessionID: "agent", Operation: "Bash(aws sts get-caller-identity)",
-			Target: "aws sts get-caller-identity", ClaimedAt: t0, CompletedAt: t0},
-		// A production write under the SAME credential.
-		{ID: "c2", SessionID: "agent", Operation: "Bash(aws s3api delete-bucket --bucket prod-payments)",
-			Target: "aws s3api delete-bucket --bucket prod-payments", ClaimedAt: t0.Add(time.Minute), CompletedAt: t0.Add(time.Minute)},
-	}
-	records := []Record{
-		{ID: "ct-1", Operation: "sts:GetCallerIdentity", AccessKeyID: "ASIAAGENTKEY",
-			Principal: "arn:aws:sts::1:assumed-role/agent/bot", RecordedAt: t0.Add(2 * time.Second)},
-		{ID: "ct-2", Operation: "s3:DeleteBucket", AccessKeyID: "ASIAAGENTKEY",
-			Principal: "arn:aws:sts::1:assumed-role/agent/bot", ProductionTouching: true,
-			Targets: []string{"arn:aws:s3:::prod-payments"}, RecordedAt: t0.Add(70 * time.Second)},
-	}
-	p := MatchPolicy{Window: 20 * time.Minute, OperationMap: DeriveOperationMap(claims)}
+	claims := []Claim{{
+		ID: "c1", SessionID: "agent",
+		Operation: "Bash(aws s3api delete-bucket --bucket prod-payments)",
+		Target:    "aws s3api delete-bucket --bucket prod-payments",
+		ClaimedAt: t0, CompletedAt: t0,
+	}}
+	records := []Record{{
+		ID: "ct", Operation: "s3:DeleteBucket",
+		Principal:          "arn:aws:sts::1:assumed-role/agent/bot",
+		ProductionTouching: true,
+		Targets:            []string{"arn:aws:s3:::prod-payments"},
+		RecordedAt:         t0.Add(30 * time.Second),
+	}}
+	om := DeriveOperationMap(claims)
 
-	rep := Join(sessions, claims, records, p)
-
-	if n := rep.Tally()[Corroborated]; n != 2 {
-		t.Fatalf("corroborated = %d, want 2 — the agent's own production action must corroborate once its credential is proved; findings: %+v", n, rep.Findings)
+	// Unscoped: the engine cannot tell this record from a stranger's, so it
+	// refuses to corroborate — the safe direction, not the convenient one.
+	unscoped := Join(sessions, claims, records, MatchPolicy{Window: 20 * time.Minute, OperationMap: om})
+	if n := unscoped.Tally()[Corroborated]; n != 0 {
+		t.Errorf("unscoped corroborated = %d, want 0 — the engine must not credit a production record it cannot prove is the agent's", n)
 	}
-	if n := rep.Tally()[Unattributed]; n != 0 {
-		t.Errorf("unattributed = %d, want 0 — the record IS the agent's, proved by ct-1's shared credential", n)
+	if n := unscoped.Tally()[Unattributed]; n != 1 {
+		t.Errorf("unscoped unattributed = %d, want 1", n)
+	}
+
+	// Scoped: the operator asserts `agent/bot` is the agent, and the same record
+	// now corroborates.
+	scoped := Join(sessions, claims, records, MatchPolicy{
+		Window: 20 * time.Minute, OperationMap: om,
+		AgentRecord: func(r Record) bool { return strings.Contains(r.Principal, "agent/bot") },
+	})
+	if n := scoped.Tally()[Corroborated]; n != 1 {
+		t.Fatalf("scoped corroborated = %d, want 1 — the operator asserted the principal; findings: %+v", n, scoped.Findings)
+	}
+	if n := scoped.Tally()[Unattributed]; n != 0 {
+		t.Errorf("scoped unattributed = %d, want 0", n)
 	}
 }
 
@@ -365,4 +378,57 @@ func TestJoin_MismatchNeverStealsAnAgreeingRecord(t *testing.T) {
 	if n := rep.Tally()[Corroborated]; n != 1 {
 		t.Errorf("corroborated = %d, want 1 (the lister)", n)
 	}
+}
+
+// The attacks a fresh adversarial review found against the FIRST attempt at this
+// guard, which tried to prove the agent's credential from a coincidental match.
+// They must stay dead: each erases a stranger's production action into a false
+// corroboration, the one verdict this engine cannot reach.
+func TestJoin_CoincidenceNeverProvesTheAgent(t *testing.T) {
+	t.Parallel()
+	sessions := []Session{{ID: "agent", StartedAt: t0, EndedAt: t0.Add(time.Hour)}}
+
+	// Attack 1 — the bootstrap. The agent claims a harmless list AND a deletion.
+	// A stranger did both, under one key. The read must not "prove" the
+	// stranger's credential and thereby unlock crediting them with the deletion.
+	t.Run("read does not launder a stranger's credential", func(t *testing.T) {
+		t.Parallel()
+		claims := []Claim{
+			{ID: "c1", SessionID: "agent", Operation: "Bash(aws s3api list-buckets)", Target: "aws s3api list-buckets", ClaimedAt: t0, CompletedAt: t0},
+			{ID: "c2", SessionID: "agent", Operation: "Bash(aws s3api delete-bucket --bucket prod-x)", Target: "aws s3api delete-bucket --bucket prod-x", ClaimedAt: t0.Add(time.Minute), CompletedAt: t0.Add(time.Minute)},
+		}
+		records := []Record{
+			{ID: "list", Operation: "s3:ListBuckets", Principal: "arn:aws:iam::1:user/dana", AccessKeyID: "AKIASTRANGER", RecordedAt: t0.Add(time.Second)},
+			{ID: "del", Operation: "s3:DeleteBucket", Principal: "arn:aws:iam::1:user/dana", AccessKeyID: "AKIASTRANGER", ProductionTouching: true, Targets: []string{"arn:aws:s3:::prod-x"}, RecordedAt: t0.Add(90 * time.Second)},
+		}
+		rep := Join(sessions, claims, records, MatchPolicy{Window: 20 * time.Minute, OperationMap: DeriveOperationMap(claims)})
+		if hasCorroboratedRecord(rep, "del") {
+			t.Error("the stranger's production deletion was corroborated via a coincidental read")
+		}
+		if rep.Tally()[Unattributed] != 1 {
+			t.Errorf("the stranger's deletion must remain reportable; unattributed = %d, want 1", rep.Tally()[Unattributed])
+		}
+	})
+
+	// Attack 2 — a self-declared --operator (the weakest binding) binds the
+	// SESSION, and must not de-escalate a stranger's in-window production record.
+	t.Run("declared operator does not disarm the guard", func(t *testing.T) {
+		t.Parallel()
+		declared := []Session{{ID: "agent", Human: "alice@x.com", Attribution: Attribution{Method: AttrDeclared}, StartedAt: t0, EndedAt: t0.Add(time.Hour)}}
+		claims := []Claim{{ID: "c1", SessionID: "agent", Operation: "Bash(aws s3api delete-bucket --bucket prod-x)", Target: "aws s3api delete-bucket --bucket prod-x", ClaimedAt: t0, CompletedAt: t0}}
+		records := []Record{{ID: "del", Operation: "s3:DeleteBucket", Principal: "arn:aws:iam::1:user/dana", AccessKeyID: "AKIASTRANGER", ProductionTouching: true, Targets: []string{"arn:aws:s3:::prod-x"}, RecordedAt: t0.Add(30 * time.Second)}}
+		rep := Join(declared, claims, records, MatchPolicy{Window: 20 * time.Minute, OperationMap: DeriveOperationMap(claims)})
+		if hasCorroboratedRecord(rep, "del") {
+			t.Error("a self-declared operator disarmed the guard: the stranger's deletion was corroborated")
+		}
+	})
+}
+
+func hasCorroboratedRecord(rep Report, recordID string) bool {
+	for _, f := range rep.Findings {
+		if f.Kind == Corroborated && f.Record != nil && f.Record.ID == recordID {
+			return true
+		}
+	}
+	return false
 }
