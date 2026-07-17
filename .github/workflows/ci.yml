@@ -44,3 +44,19 @@ jobs:
 
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+      # Regenerate the CycloneDX SBOM from the current module graph so the OSV
+      # scan below always runs against live dependencies, never a stale committed
+      # snapshot.
+      - name: regenerate SBOM (CycloneDX)
+        run: go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.10.0 mod -json -output docs/security/sbom.cdx.json
+
+      # osv-scanner is the estate's OSV-database supply-chain gate — the same
+      # google/osv-scanner-action every JS repo runs — here over go.mod and the
+      # freshly-regenerated SBOM. govulncheck above adds Go-native reachability.
+      - name: osv-scanner
+        uses: google/osv-scanner-action/osv-scanner-action@v2.3.8
+        with:
+          scan-args: |-
+            --recursive
+            ./
