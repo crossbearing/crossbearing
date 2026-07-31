@@ -8,6 +8,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The vulnerability scan below is only true as of the last push. A CVE
+  # disclosed against a dependency that has not changed is invisible until
+  # someone happens to commit — so re-run the whole gate weekly against an
+  # unchanged tree. Mondays 06:00 UTC; the org's repos are staggered by 30
+  # minutes so a bad advisory day does not land as one indistinguishable pile.
+  schedule:
+    - cron: "0 6 * * 1"
+  # and on demand, for when an advisory lands and waiting until Monday is wrong
+  workflow_dispatch:
 
 permissions:
   contents: read
