@@ -163,7 +163,10 @@ const eksSSOUser = "arn:aws:sts::111122223333:assumed-role/AWSReservedSSO_Admini
 
 // eksEvent fabricates an EKS audit Event, including the user.extra map
 // aws-iam-authenticator attaches. Shape taken verbatim from a live
-// dev-eks audit log.
+// dev-eks audit log; every identifier in it is a placeholder (the
+// documentation account, an EXAMPLE principal id, TEST-NET-3 source IP).
+// The shape is what the ingester parses — the values never mattered, and
+// this repo is public.
 func eksEvent(id, verb, user, accessKey string, at time.Time) string {
 	extra := ""
 	if accessKey != "" {
