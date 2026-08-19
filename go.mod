@@ -2,10 +2,18 @@ module github.com/crossbearing/crossbearing
 
 go 1.26.0
 
-// Patch-current toolchain: govulncheck gates CI, and GO-2026-5856
-// (crypto/tls) is reachable from this module's call graph below
-// go1.26.5.
-toolchain go1.26.5
+// Patch-current toolchain. go.sum is deliberately lean, so the standard
+// library is most of the third-party code this binary ships — and it is
+// govulncheck's most frequent finding here. Six stdlib advisories were
+// reachable from this module's call graph below go1.26.6: GO-2026-6218
+// net/url, GO-2026-6091 html/template, GO-2026-6090 crypto/tls,
+// GO-2026-6088 encoding/xml, GO-2026-5972 encoding/asn1, GO-2026-5026
+// net/http.
+//
+// Bump this when the gate says to, not on a calendar. CI re-runs govulncheck
+// weekly against an unchanged tree precisely so an advisory disclosed after
+// the last push still fails the build (3f01890).
+toolchain go1.26.6
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.42.1
