@@ -16,15 +16,7 @@ import (
 
 // mockCloudTrailClient is a mock implementation of cloudTrailAPI.
 type mockCloudTrailClient struct {
-	GetTrailFunc     func(ctx context.Context, params *cloudtrail.GetTrailInput, optFns ...func(*cloudtrail.Options)) (*cloudtrail.GetTrailOutput, error)
 	LookupEventsFunc func(ctx context.Context, params *cloudtrail.LookupEventsInput, optFns ...func(*cloudtrail.Options)) (*cloudtrail.LookupEventsOutput, error)
-}
-
-func (m *mockCloudTrailClient) GetTrail(ctx context.Context, params *cloudtrail.GetTrailInput, optFns ...func(*cloudtrail.Options)) (*cloudtrail.GetTrailOutput, error) {
-	if m.GetTrailFunc != nil {
-		return m.GetTrailFunc(ctx, params, optFns...)
-	}
-	return &cloudtrail.GetTrailOutput{}, nil
 }
 
 func (m *mockCloudTrailClient) LookupEvents(ctx context.Context, params *cloudtrail.LookupEventsInput, optFns ...func(*cloudtrail.Options)) (*cloudtrail.LookupEventsOutput, error) {
@@ -42,79 +34,6 @@ var _ cloudTrailAPI = (*mockCloudTrailClient)(nil)
 // =============================================================================
 
 const testTrailARN = "arn:aws:cloudtrail:us-east-1:123456789012:trail/test-trail"
-
-func TestCloudTrailService_GetTrail(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name      string
-		trailName string
-		mockFn    func(*mockCloudTrailClient)
-		want      string
-		wantErr   bool
-	}{
-		{
-			name:      "success returns trail ARN",
-			trailName: "test-trail",
-			mockFn: func(m *mockCloudTrailClient) {
-				m.GetTrailFunc = func(ctx context.Context, params *cloudtrail.GetTrailInput, optFns ...func(*cloudtrail.Options)) (*cloudtrail.GetTrailOutput, error) {
-					if got := aws.ToString(params.Name); got != "test-trail" {
-						t.Errorf("GetTrail Name = %q, want %q", got, "test-trail")
-					}
-					return &cloudtrail.GetTrailOutput{
-						Trail: &cttypes.Trail{
-							TrailARN: aws.String(testTrailARN),
-						},
-					}, nil
-				}
-			},
-			want:    testTrailARN,
-			wantErr: false,
-		},
-		{
-			name:      "not found returns empty string",
-			trailName: "nonexistent-trail",
-			mockFn: func(m *mockCloudTrailClient) {
-				m.GetTrailFunc = func(ctx context.Context, params *cloudtrail.GetTrailInput, optFns ...func(*cloudtrail.Options)) (*cloudtrail.GetTrailOutput, error) {
-					return nil, &cttypes.TrailNotFoundException{Message: aws.String("trail not found")}
-				}
-			},
-			want:    "",
-			wantErr: false,
-		},
-		{
-			name:      "api error propagates",
-			trailName: "test-trail",
-			mockFn: func(m *mockCloudTrailClient) {
-				m.GetTrailFunc = func(ctx context.Context, params *cloudtrail.GetTrailInput, optFns ...func(*cloudtrail.Options)) (*cloudtrail.GetTrailOutput, error) {
-					return nil, errors.New("api error: access denied")
-				}
-			},
-			want:    "",
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			mockClient := &mockCloudTrailClient{}
-			if tt.mockFn != nil {
-				tt.mockFn(mockClient)
-			}
-
-			svc := (&CloudTrailService{api: mockClient})
-			got, err := svc.GetTrail(context.Background(), tt.trailName)
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("GetTrail() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if got != tt.want {
-				t.Errorf("GetTrail() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
 
 func TestCloudTrailService_LookupEvents(t *testing.T) {
 	t.Parallel()
