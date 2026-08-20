@@ -51,8 +51,18 @@ jobs:
           go test ./internal/ingest/github -run '^$' -fuzz FuzzIngest -fuzztime 10s
           go test ./internal/ingest/claudecode -run '^$' -fuzz FuzzIngest -fuzztime 10s
 
+      # Pinned, not @latest: an unpinned analyzer is a moving supply-chain gate
+      # whose verdict can shift run-to-run with no change to this repo
+      # (4024c58). Pinned does not mean frozen — advance it deliberately when
+      # upstream cuts a release, and never backwards for consistency with
+      # another repo.
+      #
+      # Cited by SHA, not by "#3". The (#N) suffixes throughout this history
+      # are squash subjects carried over from the pre-recreate repository;
+      # GitHub's numbering restarted, so those numbers resolve to nothing
+      # today and to something unrelated once enough PRs open here.
       - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
       # Regenerate the CycloneDX SBOM from the current module graph so the OSV
       # scan below always runs against live dependencies, never a stale committed
