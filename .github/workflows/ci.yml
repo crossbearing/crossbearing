@@ -62,7 +62,7 @@ jobs:
       # scan below always runs against live dependencies, never a stale committed
       # snapshot.
       - name: regenerate SBOM (CycloneDX)
-        run: go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.10.0 mod -json -output docs/security/sbom.cdx.json
+        run: go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.11.0 mod -json -output docs/security/sbom.cdx.json
 
       # osv-scanner is the estate's OSV-database supply-chain gate — the same
       # google/osv-scanner-action every JS repo runs — here over go.mod and the
