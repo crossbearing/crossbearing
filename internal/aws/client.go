@@ -1,12 +1,13 @@
 // Package aws provides lean AWS SDK client wrappers with OIDC federation
-// support, trimmed to the five services the collector needs: CloudTrail,
-// IAM, KMS, and STS.
+// support, trimmed to the four services the engine needs: CloudTrail, IAM,
+// KMS, and STS.
 package aws
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -113,12 +114,36 @@ func NewClient(ctx context.Context, cfg ClientConfig, logger *slog.Logger) (*Cli
 		logger = slog.Default()
 	}
 
-	// Configure HTTP transport with connection pooling for efficient connection reuse
+	// Every duration below is set because its zero value means "wait forever".
+	// A custom http.Transport does not inherit the protections
+	// http.DefaultTransport sets, it inherits the zero value, so a transport
+	// written to configure pool sizes has no dial timeout, no TLS-handshake
+	// timeout and no response-header timeout unless each is given one. A
+	// black-holed endpoint then hangs until the run deadline, which reports a
+	// connection failure as a timeout and turns seconds into minutes.
+	//
+	// Proxy and ForceAttemptHTTP2 are here for the same reason: both are
+	// http.DefaultTransport behaviors a custom transport drops. The engine runs
+	// inside the customer's account, where egress through HTTPS_PROXY is
+	// common, and losing it looks like a network outage.
 	transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   dialTimeout,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   tlsHandshakeTimeout,
+		ResponseHeaderTimeout: responseHeaderTimeout,
+		ExpectContinueTimeout: 1 * time.Second,
 	}
+	// No http.Client.Timeout: it bounds the whole request including retries the
+	// SDK performs internally, so a value large enough for a retried call is
+	// too large to bound a single one. The per-phase transport timeouts above
+	// bound each attempt, and the caller's context bounds the operation.
 	httpClient := &http.Client{
 		Transport: transport,
 	}
@@ -127,6 +152,7 @@ func NewClient(ctx context.Context, cfg ClientConfig, logger *slog.Logger) (*Cli
 	awsCfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRegion(cfg.Region),
 		config.WithHTTPClient(httpClient),
+		config.WithRetryer(newRetryer),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
