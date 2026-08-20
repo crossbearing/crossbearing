@@ -44,11 +44,32 @@ type Options struct {
 	// production scope; matching records escalate finding severity. Nil
 	// means nothing is marked production-touching.
 	IsProduction func(target string) bool
+
+	// MaxPages bounds how many LookupEvents pages one Ingest will read.
+	// Defaults to defaultMaxPages.
+	//
+	// The bound exists because the loop's only other stopping condition is
+	// the API returning an empty NextToken. A token that never empties —
+	// a service-side cycle, or simply a window wider than the operator
+	// realised — otherwise spins until the run deadline and returns nothing
+	// at all, which reads as a hang rather than as too much data.
+	//
+	// Exceeding it is an ERROR, never a silent truncation. A divergence
+	// report built from a quietly capped window would understate what
+	// happened in the account, and understating is the one failure this
+	// engine must not have: a record it never read is a record it cannot
+	// report as unattributed.
+	MaxPages int
 }
 
 const (
 	defaultPageSize   = 50
 	defaultSessionGap = 30 * time.Minute
+
+	// defaultMaxPages * defaultPageSize = 250,000 events in one window —
+	// far above any window a human would scope for a report (the validated
+	// live run read 10 pages for 12 hours of a real account), and finite.
+	defaultMaxPages = 5000
 )
 
 // Result is one ingestion window's output: every management event as a
@@ -75,6 +96,9 @@ func New(api EventsAPI, logger *slog.Logger, opts Options) *Ingester {
 	}
 	if opts.SessionGap <= 0 {
 		opts.SessionGap = defaultSessionGap
+	}
+	if opts.MaxPages <= 0 {
+		opts.MaxPages = defaultMaxPages
 	}
 	return &Ingester{api: api, log: logger.With("component", "ingest-cloudtrail"), opts: opts}
 }
@@ -137,6 +161,9 @@ func (g *Ingester) Ingest(ctx context.Context, from, to time.Time) (Result, erro
 		next := awssdk.ToString(out.NextToken)
 		if next == "" {
 			break
+		}
+		if pages >= g.opts.MaxPages {
+			return Result{}, fmt.Errorf("cloudtrail window did not terminate within %d pages (%d records read so far): narrow --from/--to, or raise Options.MaxPages if the window is genuinely this large", g.opts.MaxPages, len(records))
 		}
 		input.NextToken = out.NextToken
 	}

@@ -81,7 +81,14 @@ type reportParams struct {
 	preparedFor     string
 	color           string
 	pad             time.Duration
+	timeout         time.Duration
 }
+
+// defaultRunTimeout bounds a report run when --timeout is not given. Ten
+// minutes comfortably covers a normal window (the validated live run read a
+// 12-hour window in seconds) while still failing rather than hanging when a
+// window is wider than the operator meant.
+const defaultRunTimeout = 10 * time.Minute
 
 // runReport parses flags, builds the real AWS client, and hands off to the
 // pipeline. Kept thin: everything testable lives in runReportPipeline.
@@ -113,6 +120,7 @@ func runReport(args []string) error {
 	fs.StringVar(&p.format, "format", "text", "output format: text (the operator report) or html (the print-to-PDF Agent Attribution Audit)")
 	fs.StringVar(&p.preparedFor, "prepared-for", "", "organization name on the report cover (html only)")
 	fs.StringVar(&p.color, "color", "auto", "colorize the text report: auto (only when stdout is a terminal) / always / never; NO_COLOR is honored")
+	fs.DurationVar(&p.timeout, "timeout", defaultRunTimeout, "deadline for the whole run, including every AWS call and retry; 0 means no deadline")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -127,8 +135,22 @@ func runReport(args []string) error {
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
+
+	// One deadline over the whole run. It is the outermost bound only: the
+	// HTTP transport bounds each connection phase and the SDK retryer bounds
+	// each call's attempts (internal/aws), so reaching this deadline means
+	// the WORK is too large for the window, not that a single call hung.
+	//
+	// Configurable because the right value is a property of the operator's
+	// window rather than of this binary: a 12-hour window over a quiet account
+	// takes seconds, and a month over a busy one is legitimately long. A fixed
+	// ceiling makes the second case unreportable.
+	ctx := context.Background()
+	if p.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, p.timeout)
+		defer cancel()
+	}
 
 	// The AWS client is only needed for the live paths (CloudTrail API, IAM
 	// convention checks, KMS signing). A fully offline run — captured
