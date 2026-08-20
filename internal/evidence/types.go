@@ -1,18 +1,26 @@
-// Package evidence is the signing + verification half of the evidence
-// pipeline: detached signatures over captured payloads, minted by a
-// Signer at capture time and checked by a Verifier afterwards.
+// Package evidence is the signing half of the evidence pipeline: detached
+// signatures over captured payloads, minted by a Signer at capture time.
 //
-// The KMS-backed implementations (KMSSigner / KMSVerifier) talk to AWS
-// KMS through narrow interface seams (KMSAPI / KMSVerifyAPI) so tests
-// inject fakes without spinning up KMS.
+// There is no verifier here, and its absence is load-bearing.
+// crossbearing/verify is the verifier: a separate, MIT-licensed,
+// zero-dependency binary that never imports this module and re-derives the
+// canonical bytes from the document itself. That independence is the
+// product — evidence has to verify without trusting the engine that
+// produced it, or its license. A second verifier in this package would
+// undermine that while looking useful.
+//
+// The KMS-backed implementation (KMSSigner) talks to AWS KMS through a
+// narrow interface seam (KMSAPI) so tests inject fakes without spinning up
+// KMS.
 package evidence
 
 import (
 	"context"
 )
 
-// Signer signs an evidence payload and returns a SignatureBundle that the
-// verifier can validate without trusting the capture service. Implementations:
+// Signer signs an evidence payload and returns a SignatureBundle that
+// crossbearing/verify can validate without trusting the capture service.
+// Implementations:
 //
 //   - KMSSigner — calls AWS KMS Sign with a configured key. The bundle's
 //     KeyRef is the key ARN; the verifier resolves the public key by ARN.

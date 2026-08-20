@@ -21,10 +21,9 @@ import (
 // the same way internally for RAW. The digest length must match the
 // algorithm's hash (SHA-256→32, 384→48, 512→64), which KMS validates.
 //
-// Only the ECDSA_* and RSASSA_* SHA-256/384/512 algorithms are mapped — exactly
-// the set isKnownAlgo accepts on the verify side. Algorithms KMS does not
-// pre-hash this way (Ed25519, SM2DSA, ML-DSA) are unsupported and return an
-// error rather than a silently-wrong digest.
+// Only the ECDSA_* and RSASSA_* SHA-256/384/512 algorithms are mapped.
+// Algorithms KMS does not pre-hash this way (Ed25519, SM2DSA, ML-DSA) are
+// unsupported and return an error rather than a silently-wrong digest.
 func digestForAlgo(algo kmstypes.SigningAlgorithmSpec, payload []byte) ([]byte, error) {
 	switch algo {
 	case kmstypes.SigningAlgorithmSpecEcdsaSha256,
