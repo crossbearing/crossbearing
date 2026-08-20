@@ -272,3 +272,38 @@ func TestTruncate(t *testing.T) {
 		t.Errorf("truncate long = %q", got)
 	}
 }
+
+// TestRunReport_TimeoutFlag drives runReport end to end on the fully offline
+// path (captured CloudTrail, no --region, so no AWS client is built) to cover
+// both sides of the run-deadline branch.
+//
+// A fixed ceiling makes a legitimately large window unreportable: the run dies
+// mid-ingest and reports a timeout rather than that the window is too large to
+// read. --timeout carries the value, and 0 disables the deadline.
+func TestRunReport_TimeoutFlag(t *testing.T) {
+	base := []string{
+		"--transcript", "../../demo/transcript.jsonl",
+		"--aws-cloudtrail", "../../demo/aws-cloudtrail.json",
+	}
+
+	for _, tc := range []struct{ name, timeout string }{
+		{"explicit deadline", "5m"},
+		{"deadline disabled", "0"},
+		{"default deadline", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string(nil), base...)
+			if tc.timeout != "" {
+				args = append(args, "--timeout", tc.timeout)
+			}
+			if err := runReport(args); err != nil {
+				t.Errorf("runReport(--timeout %q) = %v", tc.timeout, err)
+			}
+		})
+	}
+
+	// An unparseable duration is rejected by the flag package itself; not
+	// asserted here because the FlagSet is flag.ExitOnError (main.go:96), so
+	// a bad value exits the process rather than returning — which would take
+	// the test binary with it.
+}
