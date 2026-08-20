@@ -2,17 +2,14 @@ module github.com/crossbearing/crossbearing
 
 go 1.26.0
 
-// Patch-current toolchain. go.sum is deliberately lean, so the standard
-// library is most of the third-party code this binary ships — and it is
-// govulncheck's most frequent finding here. Six stdlib advisories were
-// reachable from this module's call graph below go1.26.6: GO-2026-6218
-// net/url, GO-2026-6091 html/template, GO-2026-6090 crypto/tls,
-// GO-2026-6088 encoding/xml, GO-2026-5972 encoding/asn1, GO-2026-5026
-// net/http.
+// Toolchain pin. go.sum is lean, so the standard library is most of the
+// third-party code this binary ships, and stdlib advisories are the bulk of
+// what govulncheck reports against it.
 //
-// Bump this when the gate says to, not on a calendar. CI re-runs govulncheck
-// weekly against an unchanged tree precisely so an advisory disclosed after
-// the last push still fails the build (3f01890).
+// Advance this when the vulnerability gate fails, not on a calendar. CI runs
+// govulncheck on a schedule as well as on push, so an advisory disclosed
+// against an unchanged tree fails the build rather than waiting for the next
+// commit to notice it.
 toolchain go1.26.6
 
 require (
