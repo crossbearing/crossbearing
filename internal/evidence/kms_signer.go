@@ -52,10 +52,22 @@ type KMSAPI interface {
 	Sign(ctx context.Context, params *kms.SignInput, optFns ...func(*kms.Options)) (*kms.SignOutput, error)
 }
 
-// KMSSigner signs evidence payloads via AWS KMS. The KeyARN identifies an
-// asymmetric signing key; verifiers resolve the public key by ARN through
-// kms:GetPublicKey, so the bundle is decoupled from the capture service's
-// trust state.
+// KMSSigner signs evidence payloads via AWS KMS. KeyARN identifies the
+// asymmetric signing key and is recorded in the bundle as a LABEL — it says
+// which key signed, and nothing resolves it at verification time.
+//
+// The signature is detached ECDSA over the canonical payload digest, so
+// checking it needs the public half and nothing else: no KMS call, no AWS
+// account, no network, and no cooperation from us. crossbearing/verify takes
+// the public key as a file (--public-key). An operator may obtain that file
+// with `aws kms get-public-key` once, while the key lives; after that the
+// signature outlives the key, and a package signed by a key that has since
+// been deleted still verifies against the archived public half forever.
+//
+// A signature that could only be checked by resolving KeyARN through
+// kms:GetPublicKey would die with the key, taking every package it ever signed
+// with it. Verification depends on the public half alone precisely so that
+// cannot happen.
 //
 // SigningAlgorithm defaults to ECDSA_SHA_256 when empty. Operators using
 // RSA keys must override.
