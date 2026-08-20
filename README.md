@@ -102,42 +102,64 @@ lag — a window ending near now is not settled.
 
 ### Live validation tests
 
-The suites are hermetic by default. Two env-gated tests validate against real
-infrastructure:
+The suites are hermetic by default: `go test ./...` needs no credentials and
+reaches no network. Every ingester additionally carries an env-gated `TestLive`
+that runs against the real thing, skipped unless its variable is set — because
+a parser that only ever sees fixtures is a parser that has never met the log it
+claims to read. A fixture encodes what the schema was understood to be; the
+live gate is what tests that understanding against the provider.
 
 ```sh
-# CloudTrail ingestion against a real account (read-only)
+# record side
 CROSSBEARING_LIVE=1 AWS_PROFILE=<profile> \
   go test ./internal/ingest/cloudtrail -run TestLive -v
+CROSSBEARING_GITHUB_AUDIT=<export>.jsonl [CROSSBEARING_GITHUB_ORG=<org>] \
+  go test ./internal/ingest/github -run TestLive -v
+CROSSBEARING_K8S_AUDIT=<audit>.jsonl \
+  go test ./internal/ingest/k8s -run TestLive -v
+CROSSBEARING_GCP_AUDIT=<entries>.json \
+  go test ./internal/ingest/gcp -run TestLive -v
+CROSSBEARING_AZURE_AUDIT=<activity-log>.json \
+  go test ./internal/ingest/azure -run TestLive -v
 
-# transcript ingestion against a real Claude Code session file
-CROSSBEARING_TRANSCRIPT=<path>.jsonl \
+# claim side
+CROSSBEARING_TRANSCRIPT=<session>.jsonl \
   go test ./internal/ingest/claudecode -run TestLive -v
+CROSSBEARING_BEDROCK_LOG=<invocations>.jsonl \
+  go test ./internal/ingest/bedrock -run TestLive -v
+
+# signing, against a real KMS key (kms:Sign + kms:Verify)
+CROSSBEARING_KMS_KEY=<key-arn> [CROSSBEARING_AEP=<package>.json] \
+  go test ./internal/pack -run TestLive -v
 ```
 
 ## Architecture
 
 ```
 internal/
-├── aws/           lean AWS client layer (CloudTrail, S3, KMS, IAM, STS)
-├── evidence/      KMS signing + verification (ECDSA, detached signatures)
+├── aws/           lean AWS client layer (CloudTrail, KMS, IAM, STS)
+├── evidence/      KMS signing (ECDSA, detached signatures). No verifier here —
+│                  it lives in a separate repo, see License below
 ├── ingest/        stream ingesters → corroborate vocabulary
 │   ├── cloudtrail/   record side: LookupEvents → Records + credential sessions
-│   ├── claudecode/   claim side: transcripts → Claims + declared sessions
 │   ├── github/       record side: org audit log → Records + actor sessions
 │   ├── k8s/          record side: audit events → Records + impersonation sessions
 │   ├── gcp/          record side: Cloud Audit Logs → Records + delegation sessions
-│   └── azure/        record side: Activity Log → Records + delegation sessions
+│   ├── azure/        record side: Activity Log → Records + delegation sessions
+│   ├── claudecode/   claim side: transcripts → Claims + declared sessions
+│   └── bedrock/      claim side: model-invocation logs → Claims + sessions
 ├── attribute/     session ⇄ session binding + trust-policy convention checks
 ├── corroborate/   the divergence join: claims vs records (the core)
-└── pack/          Agent Evidence Package builder (aep/1: hash chain + signature + SOC2 map)
+├── pack/          Agent Evidence Package builder (aep/1: hash chain + signature + SOC2 map)
+└── render/        report → the on-brand, print-to-PDF Agent Attribution Audit
 cmd/
 └── crossbearing/  the engine binary (`report`, `version`)
 ```
 
-Dependencies are a product property: `aws-sdk-go-v2` (five services) +
-`smithy` + the Go standard library, nothing else. Buyers security-review the
-SBOM; every addition is a product decision.
+Dependencies are a product property: `aws-sdk-go-v2` (four services —
+`cloudtrail`, `iam`, `kms`, `sts`), `smithy`, and the Go standard library.
+Nothing else, and no test framework — the suite is stdlib `testing`. Buyers
+security-review the SBOM, so every addition is a product decision.
 
 ## License
 
