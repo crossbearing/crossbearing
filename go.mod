@@ -10,7 +10,7 @@ go 1.26.0
 // govulncheck on a schedule as well as on push, so an advisory disclosed
 // against an unchanged tree fails the build rather than waiting for the next
 // commit to notice it.
-toolchain go1.26.9
+toolchain go1.27.2
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.3
