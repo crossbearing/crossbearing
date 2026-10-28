@@ -25,9 +25,11 @@ process maturity. Send this with the [SBOM](./sbom.md), the
 
 ## 2. Data — access, processing, storage, transmission
 
-- **What customer data does it access?** CloudTrail management events and IAM role
-  trust policies (read-only), plus any audit-log exports *you* hand it (K8s /
-  Bedrock / GitHub / GCP / Azure). It reads logs you already keep.
+- **What customer data does it access?** The agent's own session record you hand it
+  (a Claude Code transcript and/or a Bedrock model-invocation log), CloudTrail
+  management events and IAM role trust policies (read-only), plus any audit-log
+  exports *you* hand it (Kubernetes / GitHub / GCP / Azure). It reads logs you
+  already keep.
 - **Does customer data leave the account / reach the vendor?** **No.** The engine
   has no backend to send data to. The join runs locally; the evidence package is
   written to **your** storage. Crossbearing operates the binary but receives no
@@ -71,8 +73,10 @@ process maturity. Send this with the [SBOM](./sbom.md), the
 - **Sub-processors?** **None.** No SaaS dependencies, no hosting provider holding
   customer data (the engine runs in *your* account), no telemetry/analytics, no
   third-party APIs in the data path.
-- **Third-party libraries?** The AWS SDK for Go v2 (5 services) + smithy-go — 22
-  modules, all Apache-2.0, **zero non-AWS dependencies**. See [SBOM](./sbom.md).
+- **Third-party libraries?** The AWS SDK for Go v2 (the CloudTrail, IAM, KMS and STS
+  clients, plus the SSO, SSO OIDC and sign-in services its credential chain needs)
+  and smithy-go — every component Apache-2.0, **zero non-AWS dependencies**. The
+  [SBOM](./sbom.md) is the complete list.
 - **AI/LLM use?** The engine **does not call any model** — it is read-only and
   consumes logs; it never sends your data to an LLM.
 
@@ -81,9 +85,12 @@ process maturity. Send this with the [SBOM](./sbom.md), the
 - **SDLC?** Every change is a reviewed, squash-merged pull request on a linear,
   SSH-signed (Verified) history; no direct pushes to `main`.
 - **CI gates (all hard-fail):** `gofmt`, `go vet`, the test suite under `-race`, a
-  fuzz smoke, and **`govulncheck`** — see `.github/workflows/ci.yml`.
+  fuzz smoke over the untrusted-input parsers, **`govulncheck`**, CycloneDX SBOM
+  regeneration, and **`osv-scanner`** over `go.mod` and the regenerated SBOM. The
+  same job also runs weekly against an unchanged tree and on demand — see
+  `.github/workflows/ci.yml`.
 - **Dependency hygiene?** Pinned `go.mod`/`go.sum` with checksums; toolchain pinned
-  to `go1.26.4`; lean single-vendor tree (the SBOM is short by design).
+  by the `toolchain` directive in `go.mod`, which CI builds with; lean single-vendor tree (the SBOM is short by design).
 - **Vulnerability response?** `govulncheck` gates every build; the toolchain pin is
   kept patch-current as it flags advisories.
 
@@ -116,7 +123,8 @@ process maturity. Send this with the [SBOM](./sbom.md), the
   sub-processors) plus a published [threat model](../threat-model.md) and this pack.
 - **What it produces for *your* compliance:** the Agent Evidence Package maps to
   SOC 2 CC6.1 / CC7.2 / CC8.1 and ISO/IEC 42001:2023 Annex A (A.3.2 / A.6.2.8 /
-  A.6.2.6), and is independently verifiable — see the partner materials.
+  A.6.2.6), and is independently verifiable with the MIT-licensed verifier at
+  github.com/crossbearing/verify — see the [runbook](../runbook.md#verifying-an-evidence-package).
 - **Threat model / pen test?** A code-cited STRIDE [threat model](../threat-model.md)
   is published with residual risks; a third-party review is welcomed as part of the
   design-partner engagement (the engagement *is* the security review).

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Regenerate the CycloneDX SBOM from the shipped binary's build graph, enriched
 # with the (uniform, verified) Apache-2.0 license for the AWS SDK / smithy-go
-# tree. Requires cyclonedx-gomod:
-#   go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.9.0
+# tree. Requires cyclonedx-gomod at the version .github/workflows/ci.yml pins:
+#   go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@"$(grep -oE 'cyclonedx-gomod@v[0-9.]+' .github/workflows/ci.yml | cut -d@ -f2)"
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
