@@ -59,11 +59,16 @@ process maturity. Send this with the [SBOM](./sbom.md), the
 
 ## 4. Encryption
 
-- **At rest?** The engine stores no data. The evidence package lives in **your** S3
-  under **your** encryption; signing uses **your** KMS key.
+- **At rest?** The engine stores no data. It writes the evidence package as JSON to
+  the file path you choose (`--pack`); it is stored wherever you put it, under
+  whatever encryption you apply there. When signed (`--kms-key`), it is signed with
+  **your** KMS key.
 - **In transit?** TLS to AWS endpoints.
-- **Signing / integrity?** Findings are SHA-256 hash-chained; the package is signed
-  detached with **your** AWS KMS key (ECDSA P-256 / `ECDSA_SHA_256` by default).
+- **Signing / integrity?** Findings are SHA-256 hash-chained. When you pass
+  `--kms-key`, the package is signed detached with **your** AWS KMS key
+  (`ECDSA_SHA_256` by default); without it the package is emitted explicitly
+  unsigned. Crossbearing never holds signing-key material — KMS performs the
+  signature.
   Crossbearing never holds signing-key material — KMS performs the signature.
 - **Key management?** Your KMS key, your key policy, your rotation. The engine calls
   only `kms:Sign`; it never exports, decrypts, or fetches key material.
@@ -82,8 +87,13 @@ process maturity. Send this with the [SBOM](./sbom.md), the
 
 ## 6. Secure development & vulnerability management
 
-- **SDLC?** Every change is a reviewed, squash-merged pull request on a linear,
-  SSH-signed (Verified) history; no direct pushes to `main`.
+- **SDLC?** Changes to `main` go through pull requests, merged by squash (the only
+  merge method enabled), and each must pass the `verify` CI check against an
+  up-to-date base, with all conversations resolved. Force pushes and branch deletion
+  are blocked. Approving reviews, signed commits and linear history are not
+  enforced, and repository admins can bypass these rules;
+  `gh api repos/crossbearing/crossbearing/branches/main/protection` shows the
+  enforced settings.
 - **CI gates (all hard-fail):** `gofmt`, `go vet`, the test suite under `-race`, a
   fuzz smoke over the untrusted-input parsers, **`govulncheck`**, CycloneDX SBOM
   regeneration, and **`osv-scanner`** over `go.mod` and the regenerated SBOM. The
