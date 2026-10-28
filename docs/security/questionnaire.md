@@ -87,13 +87,14 @@ process maturity. Send this with the [SBOM](./sbom.md), the
 
 ## 6. Secure development & vulnerability management
 
-- **SDLC?** Changes to `main` go through pull requests, merged by squash (the only
-  merge method enabled), and each must pass the `verify` CI check against an
-  up-to-date base, with all conversations resolved. Force pushes and branch deletion
-  are blocked. Approving reviews, signed commits and linear history are not
-  enforced, and repository admins can bypass these rules;
-  `gh api repos/crossbearing/crossbearing/branches/main/protection` shows the
-  enforced settings.
+- **SDLC?** Every change to `main` is a pull request, squash-merged (the only merge
+  method enabled), and must pass the `verify` CI check against an up-to-date base
+  with all conversations resolved. `main` requires signed commits and linear
+  history, blocks force pushes and deletion, and applies these rules to
+  administrators too, so there is no bypass. Crossbearing has a single maintainer,
+  so there is no second human reviewer: the CI gates below are the review every
+  change must pass. `gh api repos/crossbearing/crossbearing/branches/main/protection`
+  shows the enforced settings.
 - **CI gates (all hard-fail):** `gofmt`, `go vet`, the test suite under `-race`, a
   fuzz smoke over the untrusted-input parsers, **`govulncheck`**, CycloneDX SBOM
   regeneration, and **`osv-scanner`** over `go.mod` and the regenerated SBOM. The
