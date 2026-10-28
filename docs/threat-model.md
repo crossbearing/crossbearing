@@ -21,10 +21,13 @@ way the product's findings are.
 ## Trust boundaries
 
 ```
- transcript .jsonl ──(UNTRUSTED: agent-written)──▶ ingest/claudecode
- CloudTrail API ────(TLS + SigV4, AWS-auth'd)────▶ ingest/cloudtrail
- IAM GetRole ──────(TLS + SigV4)─────────────────▶ attribute conventions
- KMS Sign ─────────(TLS + SigV4)─────────────────▶ evidence signing
+ transcript .jsonl ──────(UNTRUSTED: agent-written)──────▶ ingest/claudecode
+ Bedrock invocation log ─(UNTRUSTED: agent-written)──────▶ ingest/bedrock
+ CloudTrail API ─────────(TLS + SigV4, AWS-auth'd)───────▶ ingest/cloudtrail
+ audit-log files ────────(UNTRUSTED: operator-supplied)──▶ ingest/{cloudtrail,github,k8s,gcp,azure}
+ app-humans .json ───────(UNTRUSTED: operator-supplied)──▶ GitHub attribution
+ IAM GetRole ────────────(TLS + SigV4)───────────────────▶ attribute conventions
+ KMS Sign ───────────────(TLS + SigV4)───────────────────▶ evidence signing
  local filesystem ◀──(0644 artifact, public-by-design)── pack output
 ```
 
@@ -34,8 +37,11 @@ way the product's findings are.
 
 - **A consumer trusts the signing key, not the emitting machine**: the
   package signature is detached over canonical bytes
-  (`internal/pack/pack.go` `Payload`/`Sign`); the verifier resolves the
-  public key from KMS by ARN (`internal/evidence/kms_verifier.go`).
+  (`internal/pack/pack.go` `Payload`/`Sign`); the verifier is
+  crossbearing/verify, a separate zero-dependency binary that checks the
+  signature against a public-key file (`--public-key`) with no KMS call, so a
+  package outlives its signing key (`internal/evidence/kms_signer.go`
+  `KMSSigner`).
 - **A declared operator is self-asserted and graded as such**:
   `corroborate.AttrDeclared` is documented as the weakest method; record
   -side bindings (SourceIdentity, session tags) outrank it and
@@ -78,14 +84,19 @@ way the product's findings are.
 
 ### Denial of service
 
-- Every AWS call runs under a 10-minute context deadline
+- The whole run, every AWS call and retry included, runs under a context
+  deadline set by `--timeout` (10 minutes by default; `0` disables it)
   (`cmd/crossbearing/main.go`); HTTP transport pools are bounded
   (`internal/aws/client.go`).
-- LookupEvents pages at the API maximum (50) under SDK retry/backoff;
-  memory over a window is unbounded **by design** for the single-run CLI —
-  a daemonized engine must add caps first (tracked in CLAUDE.md).
-- Untrusted-input parsers are fuzzed in CI (`FuzzAWSCLIRecordOps`,
-  `FuzzParseARN`); a malformed transcript line or event degrades, never
+- LookupEvents pages at the API maximum (50) under SDK retry/backoff, and
+  one window is capped at `Options.MaxPages` pages (default 5000, so 250,000
+  events) in `internal/ingest/cloudtrail/ingest.go`. Exceeding the cap is an
+  error, never a silent truncation, because a quietly capped window would
+  understate what happened in the account.
+- Untrusted-input parsers are fuzzed in CI (the `fuzz smoke` step in
+  `.github/workflows/ci.yml`: `FuzzCLIRecordOps`, `FuzzParseARN`,
+  `FuzzSplitJSONArrayOrLines`, and `FuzzIngest` for the k8s, gcp, azure,
+  github and claudecode ingesters); a malformed transcript line or event degrades, never
   crashes (`extractedFromEnvelope` fallback, bad-line counters).
 
 ### Elevation of privilege
@@ -94,8 +105,11 @@ way the product's findings are.
   `cloudtrail:LookupEvents`, `iam:GetRole`, and `kms:Sign` (only with
   `--kms-key`). Nothing in the production call graph mutates customer
   infrastructure.
-- **Supply chain is a product property**: go.sum is aws-sdk-go-v2 (five
-  services) + smithy + stdlib; `govulncheck` fails CI
+- **Supply chain is a product property**: go.sum holds only aws-sdk-go-v2
+  modules (the cloudtrail, iam, kms and sts clients, the signin, sso and
+  ssooidc clients the credential chain pulls in, and SDK internals) plus
+  smithy-go, and the rest of the binary is the standard library
+  (`docs/security/sbom.cdx.json` lists the full set); `govulncheck` fails CI
   (`.github/workflows/ci.yml`); the toolchain is patch-pinned in go.mod.
 
 Suggested engine role policy (least privilege):

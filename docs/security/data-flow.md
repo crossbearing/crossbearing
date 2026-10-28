@@ -9,7 +9,7 @@ flowchart LR
   subgraph YOUR["Your AWS account / environment  (trust boundary)"]
     CT[(CloudTrail<br/>management events)]
     IAM[(IAM role<br/>trust policies)]
-    LOGS[(Audit-log exports<br/>K8s · Bedrock · GitHub · GCP · Azure<br/>you choose to provide)]
+    LOGS[(Files you hand it<br/>Claude Code transcript · Bedrock invocation log<br/>K8s · GitHub · GCP · Azure audit logs<br/>captured CloudTrail)]
     KMS[(Your KMS key)]
     S3[(Your S3 bucket)]
 
