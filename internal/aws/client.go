@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/cloudtrail"
@@ -126,27 +127,36 @@ func NewClient(ctx context.Context, cfg ClientConfig, logger *slog.Logger) (*Cli
 	// http.DefaultTransport behaviors a custom transport drops. The engine runs
 	// inside the customer's account, where egress through HTTPS_PROXY is
 	// common, and losing it looks like a network outage.
-	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   dialTimeout,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   10,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   tlsHandshakeTimeout,
-		ResponseHeaderTimeout: responseHeaderTimeout,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
-	// No http.Client.Timeout: it bounds the whole request including retries the
+	//
+	// Built through the SDK's BuildableClient rather than a bare http.Client:
+	// the SDK applies a CA bundle (AWS_CA_BUNDLE, or ca_bundle in the shared
+	// config) by adding RootCAs to the transport, which it can only do on a
+	// client that exposes WithTransportOptions. Handed a plain *http.Client,
+	// LoadDefaultConfig refuses outright, so every customer behind a
+	// TLS-inspecting egress proxy, which is where a CA bundle is set, could not
+	// start the engine at all. BuildableClient's default transport already
+	// carries Proxy, ForceAttemptHTTP2 and the pool settings; the options below
+	// bound every phase explicitly so a change in SDK defaults cannot unbound one.
+	//
+	// No client timeout: it bounds the whole request including retries the
 	// SDK performs internally, so a value large enough for a retried call is
-	// too large to bound a single one. The per-phase transport timeouts above
-	// bound each attempt, and the caller's context bounds the operation.
-	httpClient := &http.Client{
-		Transport: transport,
-	}
+	// too large to bound a single one. The per-phase transport timeouts bound
+	// each attempt, and the caller's context bounds the operation.
+	httpClient := awshttp.NewBuildableClient().
+		WithDialerOptions(func(d *net.Dialer) {
+			d.Timeout = dialTimeout
+			d.KeepAlive = 30 * time.Second
+		}).
+		WithTransportOptions(func(tr *http.Transport) {
+			tr.Proxy = http.ProxyFromEnvironment
+			tr.ForceAttemptHTTP2 = true
+			tr.MaxIdleConns = 100
+			tr.MaxIdleConnsPerHost = 10
+			tr.IdleConnTimeout = 90 * time.Second
+			tr.TLSHandshakeTimeout = tlsHandshakeTimeout
+			tr.ResponseHeaderTimeout = responseHeaderTimeout
+			tr.ExpectContinueTimeout = 1 * time.Second
+		})
 
 	// Load base AWS config
 	awsCfg, err := config.LoadDefaultConfig(ctx,
