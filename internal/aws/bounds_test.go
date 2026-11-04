@@ -2,22 +2,34 @@ package aws
 
 import (
 	"context"
+	"encoding/pem"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/smithy-go"
 )
 
-// newTestClient builds a real client through NewClient, with credentials and
-// IMDS pinned by env so config loading neither probes the network nor depends
-// on the developer's AWS profile.
-func newBoundsTestClient(t *testing.T) *Client {
+// pinClientEnv pins credentials, IMDS and the CA bundle by env so config
+// loading neither probes the network nor depends on the developer's AWS
+// profile or proxy.
+func pinClientEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("AWS_ACCESS_KEY_ID", "AKID")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "SECRET")
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	t.Setenv("AWS_CA_BUNDLE", "")
+}
+
+// newBoundsTestClient builds a real client through NewClient under a pinned env.
+func newBoundsTestClient(t *testing.T) *Client {
+	t.Helper()
+	pinClientEnv(t)
 
 	c, err := NewClient(context.Background(), ClientConfig{Region: "us-east-1"}, slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -33,21 +45,52 @@ func newBoundsTestClient(t *testing.T) *Client {
 // "wait forever" — so every duration below must be non-zero or a black-holed
 // endpoint hangs until the run deadline.
 func TestTransport_BoundsEveryConnectionPhase(t *testing.T) {
-	c := newBoundsTestClient(t)
+	assertTransportBounded(t, newBoundsTestClient(t))
+}
 
-	hc, ok := c.awsConfig.HTTPClient.(*http.Client)
-	if !ok {
-		t.Fatalf("HTTPClient is %T, want *http.Client", c.awsConfig.HTTPClient)
+// TestTransport_AcceptsACABundle covers the customer behind a TLS-inspecting
+// egress proxy, who sets AWS_CA_BUNDLE so the SDK trusts the proxy's CA. The
+// SDK can only add that CA to a client built through BuildableClient; handed
+// a bare http.Client it fails config loading, and the engine cannot start.
+// The bundle must land in the transport without costing any phase its bound.
+func TestTransport_AcceptsACABundle(t *testing.T) {
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	t.Cleanup(srv.Close)
+	bundle := filepath.Join(t.TempDir(), "ca.pem")
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(bundle, certPEM, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	tr, ok := hc.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("Transport is %T, want *http.Transport", hc.Transport)
+
+	pinClientEnv(t)
+	t.Setenv("AWS_CA_BUNDLE", bundle)
+	c, err := NewClient(context.Background(), ClientConfig{Region: "us-east-1"}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("NewClient with AWS_CA_BUNDLE set: %v", err)
 	}
+	t.Cleanup(c.Close)
+
+	tr := assertTransportBounded(t, c)
+	if tr.TLSClientConfig == nil || tr.TLSClientConfig.RootCAs == nil {
+		t.Fatal("AWS_CA_BUNDLE is set but the transport carries no RootCAs: the proxy's CA would not be trusted")
+	}
+}
+
+// assertTransportBounded checks every connection phase of the client's
+// transport has a bound, and returns the transport for further checks.
+func assertTransportBounded(t *testing.T, c *Client) *http.Transport {
+	t.Helper()
+	bc, ok := c.awsConfig.HTTPClient.(*awshttp.BuildableClient)
+	if !ok {
+		t.Fatalf("HTTPClient is %T, want *awshttp.BuildableClient: the SDK cannot apply a CA bundle to anything else", c.awsConfig.HTTPClient)
+	}
+	tr := bc.GetTransport()
 
 	for _, f := range []struct {
 		name string
 		got  time.Duration
 	}{
+		{"Dialer.Timeout", bc.GetDialer().Timeout},
 		{"TLSHandshakeTimeout", tr.TLSHandshakeTimeout},
 		{"ResponseHeaderTimeout", tr.ResponseHeaderTimeout},
 		{"ExpectContinueTimeout", tr.ExpectContinueTimeout},
@@ -57,17 +100,20 @@ func TestTransport_BoundsEveryConnectionPhase(t *testing.T) {
 			t.Errorf("%s = %v; a zero value here means wait forever", f.name, f.got)
 		}
 	}
+	if got := bc.GetDialer().Timeout; got != dialTimeout {
+		t.Errorf("Dialer.Timeout = %v, want %v", got, dialTimeout)
+	}
 	if tr.DialContext == nil {
 		t.Error("DialContext is nil: without it the transport dials with no timeout")
 	}
-	// Both are http.DefaultTransport behaviors a custom transport drops
-	// silently. Losing Proxy breaks every customer behind an egress proxy.
+	// Losing Proxy breaks every customer behind an egress proxy.
 	if tr.Proxy == nil {
 		t.Error("Proxy is nil: HTTPS_PROXY/HTTP_PROXY would be ignored")
 	}
 	if !tr.ForceAttemptHTTP2 {
 		t.Error("ForceAttemptHTTP2 is false: a custom transport disables HTTP/2 unless it is set")
 	}
+	return tr
 }
 
 // TestRetryer_BudgetSurvivesThrottling pins the retry budget. CloudTrail

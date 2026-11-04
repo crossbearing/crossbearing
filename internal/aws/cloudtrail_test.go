@@ -33,8 +33,6 @@ var _ cloudTrailAPI = (*mockCloudTrailClient)(nil)
 // Tests
 // =============================================================================
 
-const testTrailARN = "arn:aws:cloudtrail:us-east-1:123456789012:trail/test-trail"
-
 func TestCloudTrailService_LookupEvents(t *testing.T) {
 	t.Parallel()
 	t.Run("success forwards input and returns events", func(t *testing.T) {
