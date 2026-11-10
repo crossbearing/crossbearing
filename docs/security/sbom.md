@@ -41,8 +41,9 @@ file.
 - **Vulnerability-scanned every build.** CI runs `govulncheck` as a hard-fail gate
   (`.github/workflows/ci.yml`) alongside `gofmt`, `go vet`, the race suite, and a
   fuzz smoke. Stdlib advisories are most of what govulncheck reports against this
-  tree, so the toolchain pin advances when the gate fails on one; CI also re-runs
-  the gate weekly against an unchanged tree.
+  tree, so the toolchain pin is kept on the newest Go release, and it also
+  advances whenever the gate fails on an advisory; CI re-runs the gate weekly
+  against an unchanged tree.
 - **Independently verifiable evidence.** The evidence package the engine emits is
   checked by a **separate, MIT-licensed, zero-dependency verifier**
   (`crossbearing/verify`) — so an auditor confirms the chain and signature

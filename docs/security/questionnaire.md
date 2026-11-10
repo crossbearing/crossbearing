@@ -103,7 +103,7 @@ process maturity. Send this with the [SBOM](./sbom.md), the
 - **Dependency hygiene?** Pinned `go.mod`/`go.sum` with checksums; toolchain pinned
   by the `toolchain` directive in `go.mod`, which CI builds with; lean single-vendor tree (the SBOM is short by design).
 - **Vulnerability response?** `govulncheck` gates every build; the toolchain pin is
-  kept patch-current as it flags advisories.
+  kept on the newest Go release, and advances whenever an advisory flags it.
 
 ## 7. Logging, monitoring & authentication
 

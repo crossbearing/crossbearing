@@ -2,10 +2,10 @@
   "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:37bff5b2-9668-44ed-be4b-61cb28180e57",
+  "serialNumber": "urn:uuid:21482f9c-9708-47b2-a841-20b789a4e252",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-11-10T06:49:33Z",
+    "timestamp": "2026-11-10T16:39:40Z",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -46,11 +46,11 @@
       }
     ],
     "component": {
-      "bom-ref": "pkg:golang/github.com/crossbearing/crossbearing@v0.0.0-20261104225657-93d9ee9248ed?type=module#cmd/crossbearing",
+      "bom-ref": "pkg:golang/github.com/crossbearing/crossbearing@v0.0.0-20261110065936-1413f404df71?type=module#cmd/crossbearing",
       "type": "application",
       "name": "github.com/crossbearing/crossbearing",
-      "version": "v0.0.0-20261104225657-93d9ee9248ed",
-      "purl": "pkg:golang/github.com/crossbearing/crossbearing@v0.0.0-20261104225657-93d9ee9248ed?goarch=arm64&goos=darwin&type=module#cmd/crossbearing",
+      "version": "v0.0.0-20261110065936-1413f404df71",
+      "purl": "pkg:golang/github.com/crossbearing/crossbearing@v0.0.0-20261110065936-1413f404df71?goarch=arm64&goos=darwin&type=module#cmd/crossbearing",
       "externalReferences": [
         {
           "url": "https://github.com/crossbearing/crossbearing",
@@ -72,7 +72,7 @@
         },
         {
           "name": "cdx:gomod:build:env:GOVERSION",
-          "value": "go1.26.10"
+          "value": "go1.27.3"
         }
       ],
       "evidence": {
@@ -709,7 +709,7 @@
   ],
   "dependencies": [
     {
-      "ref": "pkg:golang/github.com/crossbearing/crossbearing@v0.0.0-20261104225657-93d9ee9248ed?type=module#cmd/crossbearing",
+      "ref": "pkg:golang/github.com/crossbearing/crossbearing@v0.0.0-20261110065936-1413f404df71?type=module#cmd/crossbearing",
       "dependsOn": [
         "pkg:golang/github.com/aws/aws-sdk-go-v2@v1.47.8?type=module",
         "pkg:golang/github.com/aws/aws-sdk-go-v2/config@v1.33.16?type=module",
