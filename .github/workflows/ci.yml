@@ -58,14 +58,14 @@ jobs:
       # backwards to match another repository.
       - name: govulncheck
         # renovate: datasource=go depName=golang.org/x/vuln
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
       # Regenerate the CycloneDX SBOM from the current module graph so the OSV
       # scan below always runs against live dependencies, never a stale committed
       # snapshot.
       - name: regenerate SBOM (CycloneDX)
         # renovate: datasource=go depName=github.com/CycloneDX/cyclonedx-gomod
-        run: go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.11.0 mod -json -output docs/security/sbom.cdx.json
+        run: go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0 mod -json -output docs/security/sbom.cdx.json
 
       # osv-scanner is the estate's OSV-database supply-chain gate — the same
       # google/osv-scanner-action every JS repo runs — here over go.mod and the
