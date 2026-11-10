@@ -6,11 +6,12 @@ go 1.26.0
 // third-party code this binary ships, and stdlib advisories are the bulk of
 // what govulncheck reports against it.
 //
-// Advance this when the vulnerability gate fails, not on a calendar. CI runs
-// govulncheck on a schedule as well as on push, so an advisory disclosed
-// against an unchanged tree fails the build rather than waiting for the next
-// commit to notice it.
-toolchain go1.26.10
+// Kept on the newest Go release: Renovate proposes each one through the
+// go-toolchain group, and the full gate has to pass on it before it lands.
+// CI also runs govulncheck on a schedule as well as on push, so an advisory
+// disclosed against an unchanged tree fails the build rather than waiting for
+// the next commit to notice it.
+toolchain go1.27.3
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.8
